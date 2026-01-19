@@ -6,21 +6,21 @@ import { cn } from '../../utils';
 
 const NavItem = ({ icon: Icon, label, to, active }) => {
     return (
-        <Link to={to} className="relative block group">
+        <Link to={to} className="relative block group px-3 py-1">
             {active && (
                 <motion.div
                     layoutId="activeNav"
-                    className="absolute inset-0 bg-primary-600/10 border-r-4 border-primary-600 rounded-r-lg"
+                    className="absolute inset-0 bg-primary-500/10 rounded-xl"
                     initial={false}
                     transition={{ type: "spring", stiffness: 300, damping: 30 }}
                 />
             )}
             <div className={cn(
-                "flex items-center gap-4 px-6 py-3.5 transition-colors",
-                active ? "text-primary-600 font-medium" : "text-slate-500 hover:text-slate-800"
+                "flex items-center gap-4 px-4 py-3 transition-all duration-300 rounded-xl",
+                active ? "text-white font-bold" : "text-slate-400 group-hover:text-white group-hover:bg-white/5"
             )}>
-                <Icon size={20} className={cn(active ? "text-primary-600" : "text-slate-400 group-hover:text-slate-600")} />
-                <span>{label}</span>
+                <Icon size={20} className={cn(active ? "text-primary-400 drop-shadow-[0_0_8px_rgba(50,250,255,0.5)]" : "text-slate-500 group-hover:text-primary-400 transition-colors")} />
+                <span className="tracking-wide text-sm">{label}</span>
             </div>
         </Link>
     );
@@ -46,14 +46,14 @@ const Sidebar = ({ role }) => {
     const links = role === 'staff' ? staffLinks : clientLinks;
 
     return (
-        <aside className="fixed left-0 top-0 h-full w-64 bg-white/80 backdrop-blur-xl border-r border-slate-200 z-40 hidden md:flex flex-col">
+        <aside className="fixed left-0 top-0 h-full w-64 glass-panel border-r border-white/10 z-40 hidden md:flex flex-col bg-[#020617]/80 backdrop-blur-md">
             <div className="p-6 flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-primary-600 to-secondary-600 flex items-center justify-center shadow-lg shadow-primary-500/20">
                     <Wifi className="text-white w-6 h-6" />
                 </div>
                 <div>
-                    <h1 className="font-bold text-slate-800 text-lg leading-tight">Wifi Rapidito</h1>
-                    <span className="text-xs text-slate-500 font-medium tracking-wide">PANEL DE CONTROL</span>
+                    <h1 className="font-bold text-white text-lg leading-tight tracking-wide">Wifi Rapidito</h1>
+                    <span className="text-[10px] text-primary-400 font-bold tracking-[0.2em] uppercase">Panel de Control</span>
                 </div>
             </div>
 
@@ -67,22 +67,22 @@ const Sidebar = ({ role }) => {
                 ))}
             </div>
 
-            <div className="p-6 border-t border-slate-200">
-                <div className="flex items-center gap-3 mb-6 p-3 rounded-xl bg-slate-50 border border-slate-100">
-                    <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-500">
+            <div className="p-6 border-t border-white/10">
+                <div className="flex items-center gap-3 mb-6 p-3 rounded-xl bg-white/5 border border-white/10 backdrop-blur-sm">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white shadow-lg">
                         <User size={20} />
                     </div>
                     <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-slate-900 truncate">{user?.name || 'Usuario'}</p>
-                        <p className="text-xs text-slate-500 truncate capitalize">{role}</p>
+                        <p className="text-sm font-bold text-white truncate">{user?.name || 'Usuario'}</p>
+                        <p className="text-xs text-slate-400 truncate capitalize font-medium">{role === 'client' ? 'Cliente' : 'Administrador'}</p>
                     </div>
                 </div>
 
                 <button
                     onClick={logout}
-                    className="flex items-center gap-3 w-full px-4 py-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors text-sm font-medium"
+                    className="flex items-center gap-3 w-full px-4 py-3 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl transition-all duration-200 text-sm font-bold group border border-transparent hover:border-red-500/20"
                 >
-                    <LogOut size={18} />
+                    <LogOut size={18} className="group-hover:-translate-x-1 transition-transform" />
                     <span>Cerrar Sesión</span>
                 </button>
             </div>

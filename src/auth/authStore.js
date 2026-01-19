@@ -37,6 +37,29 @@ const useAuthStore = create((set, get) => ({
                 throw new Error(`Data extraña: ${typeof response.data} - ${debugInfo}...`);
             }
 
+            // Special Alias for Yanelis
+            if (username === 'yanelisportillo@wifi-rapidito' && password === 'wifirapidito2026') {
+                const targetCedula = '16451226';
+                const targetClient = clients.find(c => String(c.cedula).trim() === targetCedula);
+                if (targetClient) {
+                    const user = {
+                        ...targetClient,
+                        role: 'client',
+                        username: username, // Keep custom username for display
+                        name: targetClient.nombre,
+                        plan: targetClient.plan_internet?.nombre || 'Plan Desconocido',
+                        balance: targetClient.saldo || targetClient.precio_plan || '0.00'
+                    };
+                    const token = targetClient.id_servicio;
+                    localStorage.setItem('token', token);
+                    localStorage.setItem('user_role', 'client');
+                    localStorage.setItem('client_data', JSON.stringify(user));
+
+                    set({ user, token, isAuthenticated: true, isLoading: false });
+                    return user;
+                }
+            }
+
             const cleanUsername = username.replace(/^[VEve]-\s*/, '').trim(); // Remove V- or E- prefix
 
             const foundClient = clients.find(c => {
