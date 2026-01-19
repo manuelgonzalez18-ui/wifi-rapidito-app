@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { LogOut, Wifi, User, LayoutDashboard, CreditCard, LifeBuoy, Users, Activity, Settings } from 'lucide-react';
+import { LogOut, Wifi, User, LayoutDashboard, CreditCard, LifeBuoy, Users, Activity, Settings, FileText } from 'lucide-react';
 import useAuthStore from '../../auth/authStore';
 import { cn } from '../../utils';
 
@@ -33,7 +33,9 @@ const Sidebar = ({ role }) => {
     const clientLinks = [
         { icon: LayoutDashboard, label: 'Resumen', to: '/client' },
         { icon: CreditCard, label: 'Pagos', to: '/client/payments' },
+        { icon: FileText, label: 'Facturas', to: '/client/invoices' },
         { icon: LifeBuoy, label: 'Soporte', to: '/client/support' },
+        { icon: Settings, label: 'Configuración', to: '/client/settings' },
     ];
 
     const staffLinks = [

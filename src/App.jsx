@@ -33,8 +33,10 @@ function App() {
             </ProtectedRoute>
           }>
             <Route index element={<ClientDashboard />} />
-            <Route path="payments" element={<div className="p-8"><h1 className="text-2xl font-bold mb-4">Pagos</h1><p>Próximamente</p></div>} />
-            <Route path="support" element={<div className="p-8"><h1 className="text-2xl font-bold mb-4">Soporte</h1><p>Próximamente</p></div>} />
+            <Route path="payments" element={<div className="glass-panel p-8 rounded-2xl"><h1 className="text-2xl font-bold mb-4 font-display text-white">Reportar Pagos</h1><p className="text-slate-400">Módulo de pagos en construcción.</p></div>} />
+            <Route path="invoices" element={<div className="glass-panel p-8 rounded-2xl"><h1 className="text-2xl font-bold mb-4 font-display text-white">Facturas</h1><p className="text-slate-400">Historial de facturación en construcción.</p></div>} />
+            <Route path="support" element={<div className="glass-panel p-8 rounded-2xl"><h1 className="text-2xl font-bold mb-4 font-display text-white">Soporte Técnico</h1><p className="text-slate-400">Sistema de tickets en construcción.</p></div>} />
+            <Route path="settings" element={<div className="glass-panel p-8 rounded-2xl"><h1 className="text-2xl font-bold mb-4 font-display text-white">Configuración</h1><p className="text-slate-400">Gestión de contraseña en construcción.</p></div>} />
           </Route>
 
           <Route path="/staff" element={
