@@ -37,23 +37,31 @@ const useAuthStore = create((set, get) => ({
                 throw new Error(`Data extraña: ${typeof response.data} - ${debugInfo}...`);
             }
 
-            const cleanUsername = username.replace(/^[VEve]-\s*/, '').trim(); // Remove V- or E- prefix
+            // Normalize input: Remove V-, spaces, and @wifi-rapidito suffix
+            const cleanInput = username
+                .replace(/^[VEve]-\s*/, '')
+                .replace(/@wifi-rapidito$/i, '')
+                .toLowerCase()
+                .replace(/\s+/g, ''); // Remove all spaces for loose matching
 
             const foundClient = clients.find(c => {
                 const clientCedula = String(c.cedula).trim();
                 const clientId = String(c.id_servicio).trim();
+                const clientName = c.nombre.toLowerCase().replace(/\s+/g, ''); // Normalize DB name
 
-                // Strict match or match without prefix
+                // 1. Direct match with Cedula (16451226)
+                // 2. Direct match with ID (123)
+                // 3. Name match (e.g. "daleanisjimenez" matches "Daleanis Jimenez")
                 return clientCedula === username ||
-                    clientCedula === cleanUsername ||
+                    clientCedula === cleanInput ||
                     clientId === username ||
-                    clientId === cleanUsername ||
-                    c.nombre.toLowerCase().includes(username.toLowerCase());
+                    clientId === cleanInput ||
+                    clientName.includes(cleanInput);
             });
 
             if (!foundClient) {
-                console.error('Client not found. Input:', username, 'Clean:', cleanUsername); // Debug log
-                throw new Error('Usuario no encontrado. Verifique su Cédula o ID.');
+                console.error('Client not found. Input:', username, 'Clean:', cleanInput);
+                throw new Error('Usuario no encontrado. Intente con su Cédula, ID o Nombre completo.');
             }
 
             // PASSWORD CHECK
