@@ -12,7 +12,7 @@ const StaffDashboard = () => {
     useEffect(() => {
         const fetchClients = async () => {
             try {
-                const res = await api.get('/clientes');
+                const res = await api.get('/clientes/');
                 const data = res.data;
                 const clientList = Array.isArray(data) ? data : (data.results || []);
                 setClients(clientList);

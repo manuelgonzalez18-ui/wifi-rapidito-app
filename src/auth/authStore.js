@@ -22,7 +22,7 @@ const useAuthStore = create((set, get) => ({
 
             // CLIENT LOGIN: Fetch clients and find match
             // We search for the user by 'cedula' or 'id_servicio'
-            const response = await api.get('/clientes');
+            const response = await api.get('/clientes/');
 
             let clients = [];
             if (Array.isArray(response.data)) {
