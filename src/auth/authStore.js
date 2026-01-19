@@ -45,17 +45,21 @@ const useAuthStore = create((set, get) => ({
                 .replace(/\s+/g, ''); // Remove all spaces for loose matching
 
             const foundClient = clients.find(c => {
-                const clientCedula = String(c.cedula).trim();
-                const clientId = String(c.id_servicio).trim();
-                const clientName = c.nombre.toLowerCase().replace(/\s+/g, ''); // Normalize DB name
+                const clientCedula = String(c.cedula || '').trim();
+                const clientId = String(c.id_servicio || '').trim();
+                const clientName = (c.nombre || '').toLowerCase().replace(/\s+/g, ''); // Normalize DB name
+                const clientUser = (c.usuario || '').toLowerCase().trim(); // Explicit username field from Wisphub
 
-                // 1. Direct match with Cedula (16451226)
-                // 2. Direct match with ID (123)
-                // 3. Name match (e.g. "daleanisjimenez" matches "Daleanis Jimenez")
+                // 1. Direct match with Cedula or Service ID
+                // 2. Match with "Clean" input (no suffix)
+                // 3. Match with exact Database Username (e.g. user@wifi-rapidito)
+                // 4. Fuzzy Name match
                 return clientCedula === username ||
                     clientCedula === cleanInput ||
                     clientId === username ||
                     clientId === cleanInput ||
+                    clientUser === username.toLowerCase() ||
+                    clientUser === cleanInput ||
                     clientName.includes(cleanInput);
             });
 
