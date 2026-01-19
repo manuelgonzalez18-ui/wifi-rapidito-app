@@ -13,7 +13,9 @@ const StaffDashboard = () => {
         const fetchClients = async () => {
             try {
                 const res = await api.get('/clientes');
-                setClients(res.data.results);
+                const data = res.data;
+                const clientList = Array.isArray(data) ? data : (data.results || []);
+                setClients(clientList);
             } catch (err) {
                 console.error(err);
             } finally {

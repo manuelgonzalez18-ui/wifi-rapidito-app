@@ -23,7 +23,16 @@ const useAuthStore = create((set, get) => ({
             // CLIENT LOGIN: Fetch clients and find match
             // We search for the user by 'cedula' or 'id_servicio'
             const response = await api.get('/clientes');
-            const clients = response.data.results;
+
+            let clients = [];
+            if (Array.isArray(response.data)) {
+                clients = response.data;
+            } else if (response.data?.results && Array.isArray(response.data.results)) {
+                clients = response.data.results;
+            } else {
+                console.error("API Response Data:", response.data);
+                throw new Error("Formato de respuesta desconocido del servidor");
+            }
 
             const foundClient = clients.find(c =>
                 c.cedula === username ||
