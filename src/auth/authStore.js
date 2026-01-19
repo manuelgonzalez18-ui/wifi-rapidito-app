@@ -34,21 +34,30 @@ const useAuthStore = create((set, get) => ({
                 throw new Error("Formato de respuesta desconocido del servidor");
             }
 
-            const foundClient = clients.find(c =>
-                c.cedula === username ||
-                c.id_servicio === String(username) ||
-                c.nombre.toLowerCase().includes(username.toLowerCase()) // Fallback name search
-            );
+            const cleanUsername = username.replace(/^[VEve]-\s*/, '').trim(); // Remove V- or E- prefix
+
+            const foundClient = clients.find(c => {
+                const clientCedula = String(c.cedula).trim();
+                const clientId = String(c.id_servicio).trim();
+
+                // Strict match or match without prefix
+                return clientCedula === username ||
+                    clientCedula === cleanUsername ||
+                    clientId === username ||
+                    clientId === cleanUsername ||
+                    c.nombre.toLowerCase().includes(username.toLowerCase());
+            });
 
             if (!foundClient) {
-                throw new Error('Usuario no encontrado');
+                console.error('Client not found. Input:', username, 'Clean:', cleanUsername); // Debug log
+                throw new Error('Usuario no encontrado. Verifique su Cédula o ID.');
             }
 
             // PASSWORD CHECK
-            // We allow login if password matches Cedula OR '123456' (default) OR their Wifi Password
-            // This is a workaround since we can't check the real portal password hash
+            // We allow login if password matches Cedula (with or without V-) OR '123456' OR Wifi Password
             const validPasswords = [
                 foundClient.cedula,
+                String(foundClient.cedula).replace(/^[VEve]-\s*/, ''), // Allow cedula without prefix as password
                 '123456',
                 foundClient.password_ssid_router_wifi,
                 'wifi123'
