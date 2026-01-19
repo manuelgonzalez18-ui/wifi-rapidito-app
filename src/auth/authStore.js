@@ -29,9 +29,12 @@ const useAuthStore = create((set, get) => ({
                 clients = response.data;
             } else if (response.data?.results && Array.isArray(response.data.results)) {
                 clients = response.data.results;
+            } else if (response.data && typeof response.data === 'string' && response.data.includes('<!DOCTYPE html>')) {
+                throw new Error("Error del Servidor (HTML recibido). Posible problema de Proxy.");
             } else {
-                console.error("API Response Data:", response.data);
-                throw new Error("Formato de respuesta desconocido del servidor");
+                const debugInfo = JSON.stringify(response.data).slice(0, 100);
+                console.error("Unknown Data:", response.data);
+                throw new Error(`Data extraña: ${typeof response.data} - ${debugInfo}...`);
             }
 
             const cleanUsername = username.replace(/^[VEve]-\s*/, '').trim(); // Remove V- or E- prefix
