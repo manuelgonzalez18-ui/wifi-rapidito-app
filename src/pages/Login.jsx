@@ -112,6 +112,10 @@ const LoginPage = () => {
                                     className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs text-center font-bold"
                                 >
                                     {error}
+                                    <br />
+                                    <span className="text-[10px] opacity-70 font-normal">
+                                        Si el problema persiste, contacta a soporte.
+                                    </span>
                                 </motion.div>
                             )}
 
