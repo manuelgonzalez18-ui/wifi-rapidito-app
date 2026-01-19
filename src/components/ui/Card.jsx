@@ -7,8 +7,8 @@ const Card = ({ children, className, hover = false, ...props }) => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             className={cn(
-                "bg-white/80 backdrop-blur-xl border border-white/40 shadow-sm rounded-2xl p-6",
-                hover && "hover:shadow-lg hover:bg-white/90 hover:-translate-y-1 transition-all duration-300",
+                "bg-[#0f172a]/40 backdrop-blur-xl border border-white/10 shadow-2xl rounded-3xl p-8",
+                hover && "hover:border-white/20 hover:bg-[#0f172a]/50 transition-all duration-300",
                 className
             )}
             {...props}
