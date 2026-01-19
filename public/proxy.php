@@ -29,9 +29,23 @@ if (empty($path)) {
 }
 
 // Construct Target URL
-// Ensure trailing slash if it was in the original request (Wisphub needs it)
-// But wait, our client adds it. Let's just append path.
+// We must append the query string (e.g. ?servicio=123) which is lost if we only use $path
+
+// Get original query string
+$query_string = $_SERVER['QUERY_STRING'];
+
+// Remove 'path=...' from query string if it exists (it's added by RewriteRule)
+// This regex replaces "path=values&" or "&path=values" or "path=values"
+$clean_query = preg_replace('/(&?path=[^&]*)/', '', $query_string);
+// Clean up leading/trailing ampersands
+$clean_query = trim($clean_query, '&');
+
 $target_url = $base_url . '/' . ltrim($path, '/');
+
+// Append clean query string if it exists
+if (!empty($clean_query)) {
+    $target_url .= '?' . $clean_query;
+}
 
 // Initialize cURL
 $ch = curl_init();
