@@ -4,7 +4,7 @@ import MockAdapter from './mock';
 const USE_MOCK = false; // Toggle this to switch between Real and Mock API
 
 const api = axios.create({
-    baseURL: '/api', // Use relative path to hit Vercel Proxy
+    baseURL: import.meta.env.BASE_URL + 'api', // Adapt to base path (e.g. /dist/api)
     headers: {
         'Content-Type': 'application/json',
     }
