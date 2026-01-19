@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
 
 // Configuration
 $api_key = 'OYIxEv1H.qmnKH5Ck8NvLWw4Tnyoa7PswdhrJlJ9s';
-$base_url = 'https://api.wisphub.app/api';
+$base_url = 'https://api.wisphub.net/api';
 
 // Get the path from the query string (rewrite rule should pass it)
 $path = isset($_GET['path']) ? $_GET['path'] : '';
