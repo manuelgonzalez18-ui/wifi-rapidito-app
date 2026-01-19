@@ -72,7 +72,7 @@ const LoginPage = () => {
                             transition={{ delay: 0.3 }}
                             className="text-slate-400 text-sm font-medium tracking-widest uppercase"
                         >
-                            Future-Ready Connectivity
+                            Internet al Alcance de Todos
                         </motion.p>
                     </div>
                 </div>
@@ -88,7 +88,7 @@ const LoginPage = () => {
                                 <Input
                                     label={<span className="text-slate-400 text-xs font-bold uppercase tracking-widest">Portal de Acceso</span>}
                                     icon={User}
-                                    placeholder="Username"
+                                    placeholder="Usuario"
                                     value={formData.username}
                                     onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                                     className="glass-input focus:ring-2 focus:ring-neon-blue/20 focus:border-neon-blue/40"
@@ -97,7 +97,7 @@ const LoginPage = () => {
                                 <Input
                                     type="password"
                                     icon={Lock}
-                                    placeholder="Password"
+                                    placeholder="Contraseña"
                                     value={formData.password}
                                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                                     className="glass-input focus:ring-2 focus:ring-neon-blue/20 focus:border-neon-blue/40"
