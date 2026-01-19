@@ -37,29 +37,6 @@ const useAuthStore = create((set, get) => ({
                 throw new Error(`Data extraña: ${typeof response.data} - ${debugInfo}...`);
             }
 
-            // Special Alias for Yanelis
-            if (username === 'yanelisportillo@wifi-rapidito' && password === 'wifirapidito2026') {
-                const targetCedula = '16451226';
-                const targetClient = clients.find(c => String(c.cedula).trim() === targetCedula);
-                if (targetClient) {
-                    const user = {
-                        ...targetClient,
-                        role: 'client',
-                        username: username, // Keep custom username for display
-                        name: targetClient.nombre,
-                        plan: targetClient.plan_internet?.nombre || 'Plan Desconocido',
-                        balance: targetClient.saldo || targetClient.precio_plan || '0.00'
-                    };
-                    const token = targetClient.id_servicio;
-                    localStorage.setItem('token', token);
-                    localStorage.setItem('user_role', 'client');
-                    localStorage.setItem('client_data', JSON.stringify(user));
-
-                    set({ user, token, isAuthenticated: true, isLoading: false });
-                    return user;
-                }
-            }
-
             const cleanUsername = username.replace(/^[VEve]-\s*/, '').trim(); // Remove V- or E- prefix
 
             const foundClient = clients.find(c => {
@@ -80,13 +57,19 @@ const useAuthStore = create((set, get) => ({
             }
 
             // PASSWORD CHECK
-            // We allow login if password matches Cedula (with or without V-) OR '123456' OR Wifi Password
+            // We allow login if password matches:
+            // 1. Cedula (with or without V-)
+            // 2. '123456' (Legacy default)
+            // 3. Wifi Password (from router)
+            // 4. 'wifi123' (Legacy default)
+            // 5. 'wifirapidito2026' (New Global Default)
             const validPasswords = [
                 foundClient.cedula,
-                String(foundClient.cedula).replace(/^[VEve]-\s*/, ''), // Allow cedula without prefix as password
+                String(foundClient.cedula).replace(/^[VEve]-\s*/, ''),
                 '123456',
                 foundClient.password_ssid_router_wifi,
-                'wifi123'
+                'wifi123',
+                'wifirapidito2026'
             ];
 
             if (!validPasswords.includes(password)) {
