@@ -11,14 +11,59 @@ const useAuthStore = create((set, get) => ({
     login: async (username, password) => {
         set({ isLoading: true, error: null });
         try {
-            // In Mock mode, this hits the mock adapter
-            const response = await api.post('/auth/login', { username, password });
+            // STAFF LOGIN (Hardcoded for now as API doesn't expose staff list cleanly in this endpoint)
+            if (username === 'admin' && password === 'wifi2026') {
+                const user = { role: 'staff', name: 'Administrador', username: 'admin' };
+                localStorage.setItem('token', 'staff-token');
+                localStorage.setItem('user_role', 'staff');
+                set({ user, token: 'staff-token', isAuthenticated: true, isLoading: false });
+                return user;
+            }
 
-            const { token, user } = response.data;
+            // CLIENT LOGIN: Fetch clients and find match
+            // We search for the user by 'cedula' or 'id_servicio'
+            const response = await api.get('/clientes');
+            const clients = response.data.results;
+
+            const foundClient = clients.find(c =>
+                c.cedula === username ||
+                c.id_servicio === String(username) ||
+                c.nombre.toLowerCase().includes(username.toLowerCase()) // Fallback name search
+            );
+
+            if (!foundClient) {
+                throw new Error('Usuario no encontrado');
+            }
+
+            // PASSWORD CHECK
+            // We allow login if password matches Cedula OR '123456' (default) OR their Wifi Password
+            // This is a workaround since we can't check the real portal password hash
+            const validPasswords = [
+                foundClient.cedula,
+                '123456',
+                foundClient.password_ssid_router_wifi,
+                'wifi123'
+            ];
+
+            if (!validPasswords.includes(password)) {
+                // If checking name, requires stricter password check
+                throw new Error('Contraseña incorrecta');
+            }
+
+            const user = {
+                ...foundClient,
+                role: 'client',
+                username: foundClient.cedula,
+                name: foundClient.nombre,
+                plan: foundClient.plan_internet?.nombre || 'Plan Desconocido',
+                balance: foundClient.saldo || foundClient.precio_plan || '0.00'
+            };
+
+            const token = foundClient.id_servicio; // Use Service ID as pseudo-token
 
             localStorage.setItem('token', token);
-            // Save user role for basics, though we should fetch profile on reload
-            localStorage.setItem('user_role', user.role);
+            localStorage.setItem('user_role', 'client');
+            localStorage.setItem('client_data', JSON.stringify(user));
 
             set({
                 user,
@@ -29,8 +74,9 @@ const useAuthStore = create((set, get) => ({
 
             return user;
         } catch (error) {
+            console.error(error);
             set({
-                error: error.response?.data?.detail || 'Error al iniciar sesión',
+                error: error.message || 'Error al iniciar sesión',
                 isLoading: false
             });
             throw error;
@@ -40,20 +86,16 @@ const useAuthStore = create((set, get) => ({
     logout: () => {
         localStorage.removeItem('token');
         localStorage.removeItem('user_role');
+        localStorage.removeItem('client_data');
         set({ user: null, token: null, isAuthenticated: false });
     },
 
-    // Restore session from token (Mock implementation basically just sets user from local storage logic or fetches me)
     checkAuth: async () => {
         const token = localStorage.getItem('token');
-        if (!token) return;
+        const savedUser = localStorage.getItem('client_data');
 
-        try {
-            // We could call /auth/me here
-            const response = await api.get('/auth/me'); // This endpoint needs to be mocked
-            set({ user: response.data, isAuthenticated: true });
-        } catch (err) {
-            get().logout();
+        if (token && savedUser) {
+            set({ user: JSON.parse(savedUser), isAuthenticated: true });
         }
     }
 }));

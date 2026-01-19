@@ -12,7 +12,7 @@ const StaffDashboard = () => {
     useEffect(() => {
         const fetchClients = async () => {
             try {
-                const res = await api.get('/clients');
+                const res = await api.get('/clientes');
                 setClients(res.data.results);
             } catch (err) {
                 console.error(err);
