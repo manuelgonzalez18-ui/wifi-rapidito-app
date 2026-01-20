@@ -1,5 +1,8 @@
 import { create } from 'zustand';
-import api from '../api/client';
+import axios from 'axios';
+
+// Use absolute path for Wisphub auth on production
+const WISPHUB_AUTH_URL = '/wisphub_auth.php';
 
 const useAuthStore = create((set, get) => ({
     user: null,
@@ -11,7 +14,7 @@ const useAuthStore = create((set, get) => ({
     login: async (username, password) => {
         set({ isLoading: true, error: null });
         try {
-            // STAFF LOGIN (Hardcoded for now as API doesn't expose staff list cleanly in this endpoint)
+            // STAFF LOGIN
             if (username === 'admin' && password === 'wifi2026') {
                 const user = { role: 'staff', name: 'Administrador', username: 'admin' };
                 localStorage.setItem('token', 'staff-token');
@@ -20,104 +23,43 @@ const useAuthStore = create((set, get) => ({
                 return user;
             }
 
-            // CLIENT LOGIN: Fetch clients and find match
-            // We search for the user by 'cedula' or 'id_servicio'
-            const response = await api.get('/clientes/');
+            // CLIENT LOGIN: Authenticate via Wisphub portal
+            console.log(`[AUTH] Attempting Wisphub portal login for: "${username}"`);
 
-            let clients = [];
-            if (Array.isArray(response.data)) {
-                clients = response.data;
-            } else if (response.data?.results && Array.isArray(response.data.results)) {
-                clients = response.data.results;
-            } else if (response.data && typeof response.data === 'string' && response.data.includes('<!DOCTYPE html>')) {
-                throw new Error("Error del Servidor (HTML recibido). Posible problema de Proxy.");
-            } else {
-                const debugInfo = JSON.stringify(response.data).slice(0, 100);
-                console.error("Unknown Data:", response.data);
-                throw new Error(`Data extraña: ${typeof response.data} - ${debugInfo}...`);
+            try {
+                const response = await axios.post(WISPHUB_AUTH_URL, {
+                    username: username.trim(),
+                    password: password
+                });
+
+                if (response.data.success && response.data.user) {
+                    const user = {
+                        role: 'client',
+                        ...response.data.user
+                    };
+
+                    const token = response.data.token;
+                    localStorage.setItem('token', token);
+                    localStorage.setItem('user_role', 'client');
+
+                    set({ user, token, isAuthenticated: true, isLoading: false });
+                    console.log(`[AUTH] ✅ Login successful via Wisphub portal`);
+                    return user;
+                } else {
+                    throw new Error(response.data.error || 'Error de autenticación');
+                }
+            } catch (authError) {
+                console.error(`[AUTH] ❌ Portal authentication failed:`, authError);
+                const errorMessage = authError.response?.data?.error ||
+                    authError.message ||
+                    'Usuario o Cédula no encontrado en Wisphub. Verifique que el Usuario o Cédula sea correcto.';
+                throw new Error(errorMessage);
             }
 
-            // Normalize input: Remove V-, spaces, and @wifi-rapidito suffix
-            const cleanInput = username
-                .replace(/^[VEve]-\s*/, '')
-                .replace(/@wifi-rapidito$/i, '')
-                .toLowerCase()
-                .replace(/\s+/g, ''); // Remove all spaces for loose matching
-
-            const foundClient = clients.find(c => {
-                const clientCedula = String(c.cedula || '').trim();
-                const clientId = String(c.id_servicio || '').trim();
-                const clientName = (c.nombre || '').toLowerCase().replace(/\s+/g, ''); // Normalize DB name
-                const clientUser = (c.usuario || '').toLowerCase().trim(); // Explicit username field from Wisphub
-
-                // 1. Direct match with Cedula or Service ID
-                // 2. Match with "Clean" input (no suffix)
-                // 3. Match with exact Database Username (e.g. user@wifi-rapidito)
-                // 4. Fuzzy Name match
-                return clientCedula === username ||
-                    clientCedula === cleanInput ||
-                    clientId === username ||
-                    clientId === cleanInput ||
-                    clientUser === username.toLowerCase() ||
-                    clientUser === cleanInput ||
-                    clientName.includes(cleanInput);
-            });
-
-            if (!foundClient) {
-                console.error('Client not found. Input:', username, 'Clean:', cleanInput);
-                throw new Error('Usuario no encontrado. Intente con su Cédula, ID o Nombre completo.');
-            }
-
-            // PASSWORD CHECK
-            // We allow login if password matches:
-            // 1. Cedula (with or without V-)
-            // 2. '123456' (Legacy default)
-            // 3. Wifi Password (from router)
-            // 4. 'wifi123' (Legacy default)
-            // 5. 'wifirapidito2026' (New Global Default)
-            const validPasswords = [
-                foundClient.cedula,
-                String(foundClient.cedula).replace(/^[VEve]-\s*/, ''),
-                '123456',
-                foundClient.password_ssid_router_wifi,
-                'wifi123',
-                'wifirapidito2026'
-            ];
-
-            if (!validPasswords.includes(password)) {
-                // If checking name, requires stricter password check
-                throw new Error('Contraseña incorrecta');
-            }
-
-            const user = {
-                ...foundClient,
-                role: 'client',
-                username: foundClient.cedula,
-                name: foundClient.nombre,
-                plan: foundClient.plan_internet?.nombre || 'Plan Desconocido',
-                balance: foundClient.saldo || foundClient.precio_plan || '0.00'
-            };
-
-            const token = foundClient.id_servicio; // Use Service ID as pseudo-token
-
-            localStorage.setItem('token', token);
-            localStorage.setItem('user_role', 'client');
-            localStorage.setItem('client_data', JSON.stringify(user));
-
-            set({
-                user,
-                token,
-                isAuthenticated: true,
-                isLoading: false
-            });
-
-            return user;
         } catch (error) {
-            console.error(error);
-            set({
-                error: error.message || 'Error al iniciar sesión',
-                isLoading: false
-            });
+            console.error('[AUTH] Login error:', error);
+            const errorMessage = error.message || 'Error de autenticación';
+            set({ error: errorMessage, isLoading: false });
             throw error;
         }
     },
@@ -125,18 +67,36 @@ const useAuthStore = create((set, get) => ({
     logout: () => {
         localStorage.removeItem('token');
         localStorage.removeItem('user_role');
-        localStorage.removeItem('client_data');
-        set({ user: null, token: null, isAuthenticated: false });
+        set({ user: null, token: null, isAuthenticated: false, error: null });
     },
 
-    checkAuth: async () => {
+    // Load user data from stored token on app startup
+    loadUser: async () => {
         const token = localStorage.getItem('token');
-        const savedUser = localStorage.getItem('client_data');
+        const role = localStorage.getItem('user_role');
 
-        if (token && savedUser) {
-            set({ user: JSON.parse(savedUser), isAuthenticated: true });
+        if (!token) {
+            set({ isAuthenticated: false, user: null });
+            return;
         }
-    }
+
+        // For staff, restore minimal user data
+        if (role === 'staff') {
+            set({
+                user: { role: 'staff', name: 'Administrador', username: 'admin' },
+                token,
+                isAuthenticated: true
+            });
+            return;
+        }
+
+        // For clients, mark as authenticated
+        set({
+            user: { role: 'client' },
+            token,
+            isAuthenticated: true
+        });
+    },
 }));
 
 export default useAuthStore;
