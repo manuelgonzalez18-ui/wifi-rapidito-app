@@ -24,7 +24,7 @@ const PaymentReport = () => {
         user_name: user?.usuario || user?.usuario_portal || user?.name || '',
         phone: user?.telefono || '',
         invoice_id: invoiceIdParam || '',
-        amount: '',
+        amount: '25', // PRECIO ÚNICO SOLICITADO
         reference: '',
         forma_pago: '16749', // Default: Transferencia Bancaria (WispHub ID)
         payment_date: new Date().toISOString().split('T')[0],
@@ -39,9 +39,13 @@ const PaymentReport = () => {
         if (!invoiceIdParam && user && (user.usuario || user.cedula)) {
             const fetchPendingInvoice = async () => {
                 try {
+                    // Extraer solo la primera parte del correo (e.g "juanguevara" de "juanguevara@wifi-rapidito")
+                    const userStripped = user.usuario ? String(user.usuario).split('@')[0] : '';
+
                     // Múltiples queries para asegurar que encontramos la factura (igual que en Invoices.jsx)
                     const invoiceQueries = [
                         user.usuario ? api.get(`/facturas/?cliente=${user.usuario}&limit=10`) : null,
+                        userStripped ? api.get(`/facturas/?cliente=${userStripped}&limit=10`) : null,
                         user.cedula ? api.get(`/facturas/?search=${user.cedula}&limit=10`) : null,
                         user.id_servicio ? api.get(`/facturas/?id_servicio=${user.id_servicio}&limit=10`) : null,
                         user.id_cliente ? api.get(`/facturas/?id_cliente=${user.id_cliente}&limit=10`) : null
@@ -78,7 +82,7 @@ const PaymentReport = () => {
                         setFormData(prev => ({
                             ...prev,
                             invoice_id: (latest.id_factura || latest.folio || latest.id).toString(),
-                            amount: (latest.total || '').toString()
+                            amount: '25' // Fuerza el precio único
                         }));
                         toast.success(`Factura #${latest.id_factura || latest.folio} auto-cargada`, { id: 'auto-load-inv' });
                     }
