@@ -36,15 +36,39 @@ const PaymentReport = () => {
 
     // AUTO-FILL ÚLTIMA FACTURA PENDIENTE
     useEffect(() => {
-        if (!invoiceIdParam && user?.usuario) {
+        if (!invoiceIdParam && user && (user.usuario || user.cedula)) {
             const fetchPendingInvoice = async () => {
                 try {
-                    // Buscar facturas del usuario actual
-                    const res = await api.get(`/facturas/?cliente=${user.usuario}&limit=10`);
-                    const items = Array.isArray(res.data?.results) ? res.data.results : (Array.isArray(res.data) ? res.data : []);
+                    // Múltiples queries para asegurar que encontramos la factura (igual que en Invoices.jsx)
+                    const invoiceQueries = [
+                        user.usuario ? api.get(`/facturas/?cliente=${user.usuario}&limit=10`) : null,
+                        user.cedula ? api.get(`/facturas/?search=${user.cedula}&limit=10`) : null,
+                        user.id_servicio ? api.get(`/facturas/?id_servicio=${user.id_servicio}&limit=10`) : null,
+                        user.id_cliente ? api.get(`/facturas/?id_cliente=${user.id_cliente}&limit=10`) : null
+                    ].filter(Boolean);
+
+                    const responses = await Promise.allSettled(invoiceQueries);
+
+                    let allResults = [];
+                    responses.forEach(res => {
+                        if (res.status === 'fulfilled') {
+                            const data = res.value.data;
+                            const items = Array.isArray(data?.results) ? data.results : (Array.isArray(data) ? data : []);
+                            allResults.push(...items);
+                        }
+                    });
+
+                    // Deduplicar
+                    const uniqueMap = new Map();
+                    allResults.forEach(item => {
+                        const id = item.id_factura || item.id || item.folio;
+                        if (id) uniqueMap.set(id, item);
+                    });
+
+                    let uniqueInvoices = Array.from(uniqueMap.values());
 
                     // Filtrar solo las pendientes
-                    const pendientes = items.filter(inv => inv.estado === 'pendiente' || inv.estado === 'por_pagar');
+                    const pendientes = uniqueInvoices.filter(inv => inv.estado === 'pendiente' || inv.estado === 'por_pagar');
 
                     if (pendientes.length > 0) {
                         // Tomar la más reciente
