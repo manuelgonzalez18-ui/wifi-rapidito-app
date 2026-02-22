@@ -242,7 +242,7 @@ const Invoices = () => {
 
                                             {(inv.estado === 'pendiente' || inv.estado === 'por_pagar') && (
                                                 <button
-                                                    onClick={() => window.location.href = `/client/payments?invoice=${inv.id_factura || inv.id}`}
+                                                    onClick={() => navigate(`/client/payments?invoice=${inv.id_factura || inv.id}`)}
                                                     className="px-3 py-1.5 bg-green-500 hover:bg-green-400 text-white text-xs font-bold rounded-lg shadow-lg shadow-green-500/20 transition-all flex items-center gap-2"
                                                 >
                                                     <Download size={14} />

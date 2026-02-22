@@ -71,8 +71,12 @@ const PaymentReport = () => {
 
                     let uniqueInvoices = Array.from(uniqueMap.values());
 
-                    // Filtrar solo las pendientes
-                    const pendientes = uniqueInvoices.filter(inv => inv.estado === 'pendiente' || inv.estado === 'por_pagar');
+                    // Filtrar solo las pendientes (Soporta múltiples formatos de Wisphub)
+                    const pendientes = uniqueInvoices.filter(inv => {
+                        const s = String(inv.estado || '').toLowerCase().trim();
+                        // 2 es el código numérico para pendiente en algunos endpoints de Wisphub
+                        return s.includes('pendiente') || s.includes('por_pagar') || s.includes('unpaid') || inv.estado === 2;
+                    });
 
                     if (pendientes.length > 0) {
                         // Tomar la más reciente
