@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import useAuthStore from '../../auth/authStore';
 import { toast } from 'react-hot-toast';
+import api from '../../api/client';
 
 const PaymentReport = () => {
     const [searchParams] = useSearchParams();
@@ -19,7 +20,8 @@ const PaymentReport = () => {
     const [wisphubSuccess, setWisphubSuccess] = useState(false);
 
     const [formData, setFormData] = useState({
-        user_name: user?.name || user?.nombre || user?.cedula || '',
+        // CORRECCIÓN: Usar siempre user.usuario (ej. "correo@dominio.com") para Wisphub
+        user_name: user?.usuario || user?.usuario_portal || user?.name || '',
         phone: user?.telefono || '',
         invoice_id: invoiceIdParam || '',
         amount: '',
@@ -31,6 +33,38 @@ const PaymentReport = () => {
     });
 
     const [preview, setPreview] = useState(null);
+
+    // AUTO-FILL ÚLTIMA FACTURA PENDIENTE
+    useEffect(() => {
+        if (!invoiceIdParam && user?.usuario) {
+            const fetchPendingInvoice = async () => {
+                try {
+                    // Buscar facturas del usuario actual
+                    const res = await api.get(`/facturas/?cliente=${user.usuario}&limit=10`);
+                    const items = Array.isArray(res.data?.results) ? res.data.results : (Array.isArray(res.data) ? res.data : []);
+
+                    // Filtrar solo las pendientes
+                    const pendientes = items.filter(inv => inv.estado === 'pendiente' || inv.estado === 'por_pagar');
+
+                    if (pendientes.length > 0) {
+                        // Tomar la más reciente
+                        pendientes.sort((a, b) => (b.id_factura || b.id || 0) - (a.id_factura || a.id || 0));
+                        const latest = pendientes[0];
+
+                        setFormData(prev => ({
+                            ...prev,
+                            invoice_id: (latest.id_factura || latest.folio || latest.id).toString(),
+                            amount: (latest.total || '').toString()
+                        }));
+                        toast.success(`Factura #${latest.id_factura || latest.folio} auto-cargada`, { id: 'auto-load-inv' });
+                    }
+                } catch (error) {
+                    console.error("No se pudo auto-cargar factura", error);
+                }
+            };
+            fetchPendingInvoice();
+        }
+    }, [invoiceIdParam, user]);
 
     const paymentMethods = [
         { id: '16749', name: 'Transferencia Bancaria' },
