@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Propuesta Comercial | TuPortalISP</title>
+    <style>
+        :root {
+            --primary: #22d3ee;
+            --primary-dark: #0891b2;
+            --secondary: #f472b6;
+            --bg-dark: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+        }
+
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Outfit:wght@700;900&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: linear-gradient(145deg, #1e293b, #111827);
+            border-radius: 24px;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .header {
+            background: linear-gradient(to right, #0891b2, #22d3ee);
+            padding: 60px 40px;
+            text-align: center;
+            position: relative;
+        }
+
+        .header h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 42px;
+            font-weight: 900;
+            margin-bottom: 10px;
+            color: #fff;
+            text-transform: uppercase;
+            letter-spacing: -1px;
+        }
+
+        .header p {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .section-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 24px;
+            color: var(--primary);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .pricing-card {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 30px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            text-align: center;
+        }
+
+        .pricing-card.featured {
+            background: rgba(34, 211, 238, 0.05);
+            border-color: var(--primary);
+        }
+
+        .price {
+            font-size: 48px;
+            font-weight: 800;
+            color: var(--primary);
+            margin: 10px 0;
+        }
+
+        .price-label {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+        }
+
+        .feature-list {
+            list-style: none;
+            margin-bottom: 30px;
+        }
+
+        .feature-list li {
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .feature-list li::before {
+            content: "✓";
+            color: #10b981;
+            font-weight: bold;
+        }
+
+        .footer {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 30px;
+            text-align: center;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .badge {
+            background: var(--secondary);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 99px;
+            font-size: 12px;
+            font-weight: 700;
+            display: inline-block;
+            margin-bottom: 10px;
+        }
+
+        @media screen and (max-width: 600px) {
+            .pricing-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Print optimization */
+        @media print {
+            body {
+                background: white;
+                color: black;
+                padding: 0;
+            }
+
+            .container {
+                box-shadow: none;
+                border: none;
+                width: 100%;
+                max-width: none;
+                border-radius: 0;
+            }
+
+            .header {
+                print-color-adjust: exact;
+                -webkit-print-color-adjust: exact;
+            }
+
+            .pricing-card {
+                border: 1px solid #ddd;
+                background: #fafafa !important;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Propuesta Comercial</h1>
+            <p>Portal de Autogestión Automatizado para ISPs</p>
+        </div>
+
+        <div class="content">
+            <h2 class="section-title">Inversión del Proyecto</h2>
+
+            <div class="pricing-grid">
+                <div class="pricing-card featured">
+                    <span class="price-label">Implementación</span>
+                    <div class="price">$299</div>
+                    <p style="font-size: 13px; color: var(--text-muted)">Pago único inicial</p>
+                </div>
+                <div class="pricing-card">
+                    <span class="price-label">Anualidad</span>
+                    <div class="price">$199</div>
+                    <p style="font-size: 13px; color: var(--text-muted)">A partir del mes 13</p>
+                </div>
+            </div>
+
+            <h2 class="section-title">¿Qué incluye esta oferta?</h2>
+            <ul class="feature-list">
+                <li><strong>Portal de Autogestión White Label:</strong> Personalizado con tu logo y colores.</li>
+                <li><strong>Integración con Wisphub:</strong> Sincronización automática de clientes y deudas.</li>
+                <li><strong>Módulo de Reporte de Pagos:</strong> Tus clientes suben capturas y el sistema te notifica.
+                </li>
+                <li><strong>Consulta de Saldo 24/7:</strong> Reduce en un 70% las consultas por WhatsApp.</li>
+                <li><strong>Soporte Técnico (Tickets):</strong> Gestión profesional de incidencias directamente en el
+                    portal.</li>
+                <li><strong>Hosting Incluido:</strong> Desplegado en servidores de alta disponibilidad.</li>
+                <li><strong>Optimización Móvil:</strong> Acceso perfecto desde cualquier smartphone.</li>
+                <li><strong>Bot de Enlace:</strong> Configuración para acceso directo desde WhatsApp.</li>
+            </ul>
+
+            <h2 class="section-title">¿Cómo empezar?</h2>
+            <div style="text-align: center; margin-bottom: 40px;">
+                <p style="margin-bottom: 20px; color: var(--text-muted);">Para iniciar el proceso de implementación, por
+                    favor completa tus datos en el siguiente enlace:</p>
+                <a href="https://tuportalisp.com/setup.html" target="_blank"
+                    style="display: inline-block; background: var(--primary); color: var(--bg-dark); text-decoration: none; padding: 15px 30px; border-radius: 12px; font-weight: 800; text-transform: uppercase;">Llenar
+                    Formulario de Implementación</a>
+            </div>
+
+            <h2 class="section-title">Beneficios Clave</h2>
+            <div
+                style="background: rgba(16, 185, 129, 0.1); border: 1px dashed #10b981; padding: 20px; border-radius: 12px; margin-bottom: 30px;">
+                <p style="color: #10b981; font-weight: 600; margin-bottom: 8px;">🚀 Escalabilidad sin límites</p>
+                <p style="font-size: 14px; color: var(--text-muted);">Digitaliza tu atención al cliente y deja de
+                    "apagar fuegos". Profesionaliza tu ISP y prepárate para crecer sin aumentar el personal de soporte.
+                </p>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p style="font-weight: 700; margin-bottom: 5px;">TuPortalISP.com</p>
+            <p style="font-size: 13px; color: var(--text-muted);">Automatización inteligente para proveedores de
+                internet.</p>
+        </div>
+    </div>
+</body>
+
+</html>

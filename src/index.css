@@ -4,59 +4,101 @@
   --font-sans: 'Outfit', 'Inter', sans-serif;
   --font-display: 'Syncopate', sans-serif;
 
-  --color-neon-blue: #00f2ff;
-  --color-neon-purple: #bc13fe;
-  --color-cyber-dark: #020617;
-
+  /* Holographic HUD Palette */
+  --color-neon-blue: #00f3ff;
+  --color-neon-purple: #7000ff;
+  --color-cyber-dark: #050b14;
+  --color-tech-alert: #ff2a6d;
+  
   --animate-fade-in: fadeIn 0.5s ease-out;
   --animate-slide-up: slideUp 0.5s ease-out;
-  --animate-float: float 6s ease-in-out infinite;
+  --animate-pulse-slow: pulseGlow 4s ease-in-out infinite;
+  --animate-scanline: scanline 8s linear infinite;
+
+  @keyframes pulseGlow {
+    0%, 100% { box-shadow: 0 0 5px rgba(0, 243, 255, 0.1); }
+    50% { box-shadow: 0 0 20px rgba(0, 243, 255, 0.3); }
+  }
 }
 
 /* Custom Base & Components */
 @layer base {
   body {
     @apply bg-cyber-dark text-slate-100 antialiased font-sans;
+    background-image: 
+      radial-gradient(circle at 50% 0%, rgba(0, 243, 255, 0.1) 0%, transparent 50%),
+      linear-gradient(0deg, rgba(5, 11, 20, 1) 0%, rgba(5, 11, 20, 0.8) 100%);
+    background-attachment: fixed;
   }
 }
 
 @layer components {
+  /* Holographic HUD Panel */
   .glass-panel {
-    background: rgba(15, 23, 42, 0.6);
-    backdrop-filter: blur(25px);
-    -webkit-backdrop-filter: blur(25px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    background: rgba(10, 20, 40, 0.4); /* Darker, clearer glass */
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(0, 243, 255, 0.15); /* Thin Cyan Border */
+    box-shadow: 
+      0 0 30px -10px rgba(0, 243, 255, 0.1), /* Outer Glow */
+      inset 0 0 20px rgba(0, 243, 255, 0.05); /* Inner Glow */
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Decorative Corner Accents for HUD feel */
+  .glass-panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; width: 20px; height: 20px;
+    border-top: 1px solid rgba(0, 243, 255, 0.6);
+    border-left: 1px solid rgba(0, 243, 255, 0.6);
+    border-top-left-radius: 8px;
+    opacity: 0.8;
+    pointer-events: none;
+  }
+  .glass-panel::after {
+    content: '';
+    position: absolute;
+    bottom: 0; right: 0; width: 20px; height: 20px;
+    border-bottom: 1px solid rgba(0, 243, 255, 0.6);
+    border-right: 1px solid rgba(0, 243, 255, 0.6);
+    border-bottom-right-radius: 8px;
+    opacity: 0.8;
+    pointer-events: none;
   }
 
   .glass-input {
-    background: rgba(0, 0, 0, 0.3);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: rgba(0, 10, 20, 0.6);
+    backdrop-filter: blur(4px);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    color: white;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    border-bottom: 1px solid rgba(0, 243, 255, 0.3); /* Underline style */
+    color: #e2e8f0;
+    font-family: 'Outfit', monospace; /* Tech feel */
+    letter-spacing: 0.02em;
+    transition: all 0.3s ease;
   }
 
   .glass-input:focus {
-    background: rgba(0, 0, 0, 0.5);
-    border-color: #00f2ff;
-    box-shadow: 0 0 15px rgba(0, 242, 255, 0.1);
+    background: rgba(0, 243, 255, 0.05);
+    border-color: rgba(0, 243, 255, 0.6);
+    box-shadow: 0 4px 20px -5px rgba(0, 243, 255, 0.2);
+    outline: none;
   }
 
   .neon-text {
-    text-shadow: 0 0 10px rgba(0, 242, 255, 0.5);
+    color: #00f3ff;
+    text-shadow: 0 0 10px rgba(0, 243, 255, 0.6);
+  }
+  
+  /* Buttons */
+  button {
+    letter-spacing: 0.05em; /* Spacer text for tech buttons */
   }
 }
 
-/* Custom Mesh Gradient Deep Dark */
+/* Replaces old mesh gradient with a subtle Starfield/Grid hint if needed, 
+   but we used body bg instead for cleaner look */
 .mesh-bg {
-  background-color: #020617;
-  background-image:
-    radial-gradient(at 0% 0%, hsla(250, 24%, 9%, 1) 0, transparent 50%),
-    radial-gradient(at 50% 0%, hsla(220, 40%, 15%, 1) 0, transparent 50%),
-    radial-gradient(at 100% 0%, hsla(280, 50%, 10%, 1) 0, transparent 50%),
-    radial-gradient(at 100% 100%, hsla(220, 50%, 10%, 1) 0, transparent 50%),
-    radial-gradient(at 0% 100%, hsla(250, 50%, 10%, 1) 0, transparent 50%);
-  background-attachment: fixed;
+    background: transparent; 
 }

@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  evolution_api:
+    image: atendai/evolution-api:v1.5.3
+    container_name: evolution_api
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVER_TYPE=NODE
+      - SERVER_PORT=8080
+      - ADMIN_TOKEN=rapidito_admin_2026
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_API_KEY=rapidito_key_2026
+      - DATABASE_ENABLED=false
+      # Webhook Configuration (v1.5.3 uses basic naming)
+      - WEBHOOK_GLOBAL_ENABLED=true
+      - WEBHOOK_GLOBAL_URL=http://bot_backend:5000/webhook
+      - WEBHOOK_EVENTS_ENABLED=true
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=rapidito_db_2026
+      - POSTGRES_DB=evolution
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:6.2-alpine
+    container_name: redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - ./redis_data:/data
+
+  bot_backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: bot_backend
+    restart: always
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      - EVO_API_URL=http://evolution_api:8080
+      - EVO_API_KEY=${EVO_API_KEY}
+      - INSTANCE_NAME=rapidito_bot
+      - KOMMO_SUBDOMAIN=${KOMMO_SUBDOMAIN}
+      - KOMMO_API_TOKEN=${KOMMO_API_TOKEN}
+    depends_on:
+      - evolution_api

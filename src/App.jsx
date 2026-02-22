@@ -1,9 +1,23 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import LoginPage from './pages/Login';
 import ClientDashboard from './pages/Client/Dashboard';
+import PaymentReport from './pages/Client/PaymentReport';
+import Invoices from './pages/Client/Invoices';
+import Support from './pages/Client/Support';
+import RequestPromise from './pages/Client/RequestPromise';
+import ConfirmPromisePayment from './pages/Client/ConfirmPromisePayment';
+import ConnectionDoctor from './pages/ConnectionDoctor';
 import StaffDashboard from './pages/Staff/Dashboard';
+import InvoiceDetail from './pages/Client/InvoiceDetail';
+import PaymentStoryView from './pages/Client/PaymentStoryView';
+import LiveMonitor from './pages/Admin/LiveMonitor';
 import DashboardLayout from './layouts/DashboardLayout';
+import FinanceDashboard from './pages/Admin/FinanceDashboard';
+import { motion } from 'framer-motion';
+import { LogOut, Wifi, User, LayoutDashboard, CreditCard, LifeBuoy, Users, Activity, Settings, FileText, Handshake } from 'lucide-react';
 import useAuthStore from './auth/authStore';
+import { Toaster } from 'react-hot-toast';
+import WhatsAppBubble from './components/ui/WhatsAppBubble';
 
 const ProtectedRoute = ({ children, role }) => {
   const { isAuthenticated, user } = useAuthStore();
@@ -25,6 +39,10 @@ function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
 
+        {/* Secure Admin Monitor & Finance Routes */}
+        <Route path="/monitor/admin-control-center-2026" element={<LiveMonitor />} />
+        <Route path="/finance/internal-revenue-2026" element={<FinanceDashboard />} />
+
         {/* Protected Dashboard Routes */}
         <Route element={<DashboardLayout />}>
           <Route path="/client" element={
@@ -33,9 +51,14 @@ function App() {
             </ProtectedRoute>
           }>
             <Route index element={<ClientDashboard />} />
-            <Route path="payments" element={<div className="glass-panel p-8 rounded-2xl"><h1 className="text-2xl font-bold mb-4 font-display text-white">Reportar Pagos</h1><p className="text-slate-400">Módulo de pagos en construcción.</p></div>} />
-            <Route path="invoices" element={<div className="glass-panel p-8 rounded-2xl"><h1 className="text-2xl font-bold mb-4 font-display text-white">Facturas</h1><p className="text-slate-400">Historial de facturación en construcción.</p></div>} />
-            <Route path="support" element={<div className="glass-panel p-8 rounded-2xl"><h1 className="text-2xl font-bold mb-4 font-display text-white">Soporte Técnico</h1><p className="text-slate-400">Sistema de tickets en construcción.</p></div>} />
+            <Route path="payments" element={<PaymentReport />} />
+            <Route path="invoices" element={<Invoices />} />
+            <Route path="invoices/:id" element={<InvoiceDetail />} />
+            <Route path="support" element={<Support />} />
+            <Route path="request-promise" element={<RequestPromise />} />
+            <Route path="confirm-payment" element={<ConfirmPromisePayment />} />
+            <Route path="payment-story" element={<PaymentStoryView />} />
+            <Route path="doctor" element={<ConnectionDoctor />} />
             <Route path="settings" element={<div className="glass-panel p-8 rounded-2xl"><h1 className="text-2xl font-bold mb-4 font-display text-white">Configuración</h1><p className="text-slate-400">Gestión de contraseña en construcción.</p></div>} />
           </Route>
 
@@ -53,6 +76,14 @@ function App() {
 
         <Route path="/" element={<Navigate to="/login" replace />} />
       </Routes>
+      <Toaster position="top-right" toastOptions={{
+        style: {
+          background: '#1e293b',
+          color: '#fff',
+          border: '1px solid rgba(255,255,255,0.1)'
+        }
+      }} />
+      <WhatsAppBubble />
     </Router>
   );
 }

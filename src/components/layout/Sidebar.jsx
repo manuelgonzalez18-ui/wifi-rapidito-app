@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { LogOut, Wifi, User, LayoutDashboard, CreditCard, LifeBuoy, Users, Activity, Settings, FileText } from 'lucide-react';
+import { LogOut, Wifi, User, LayoutDashboard, CreditCard, LifeBuoy, Users, Activity, Settings, FileText, Handshake, CheckSquare } from 'lucide-react';
 import useAuthStore from '../../auth/authStore';
 import { cn } from '../../utils';
 
@@ -32,7 +32,9 @@ const Sidebar = ({ role }) => {
 
     const clientLinks = [
         { icon: LayoutDashboard, label: 'Resumen', to: '/client' },
-        { icon: CreditCard, label: 'Pagos', to: '/client/payments' },
+        { icon: CreditCard, label: 'Reportar Pagos', to: '/client/payments' },
+        { icon: Handshake, label: 'Solicitar Promesa', to: '/client/request-promise' },
+        { icon: CheckSquare, label: 'Reportar Pago Promesa', to: '/client/confirm-payment' },
         { icon: FileText, label: 'Facturas', to: '/client/invoices' },
         { icon: LifeBuoy, label: 'Soporte', to: '/client/support' },
         { icon: Settings, label: 'Configuración', to: '/client/settings' },
@@ -75,7 +77,7 @@ const Sidebar = ({ role }) => {
                         <User size={20} />
                     </div>
                     <div className="flex-1 min-w-0">
-                        <p className="text-sm font-bold text-white truncate">{user?.name || 'Usuario'}</p>
+                        <p className="text-sm font-bold text-white truncate">{user?.nombre || user?.name || 'Usuario'}</p>
                         <p className="text-xs text-slate-400 truncate capitalize font-medium">{role === 'client' ? 'Cliente' : 'Administrador'}</p>
                     </div>
                 </div>
@@ -87,6 +89,9 @@ const Sidebar = ({ role }) => {
                     <LogOut size={18} className="group-hover:-translate-x-1 transition-transform" />
                     <span>Cerrar Sesión</span>
                 </button>
+                <div className="mt-4 text-center">
+                    <span className="text-[10px] text-cyan-400 font-bold font-mono bg-cyan-400/10 px-2 py-0.5 rounded">BUILD VERSION: 3.16-MASTER</span>
+                </div>
             </div>
         </aside>
     );

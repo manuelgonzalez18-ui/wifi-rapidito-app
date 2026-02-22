@@ -26,6 +26,16 @@ if (empty($username) || empty($password)) {
     exit();
 }
 
+// Normalize username - add @wifi-rapidito if needed
+if (!strpos($username, '@')) {
+    // If numeric (cedula), add suffix
+    if (preg_match('/^\d+$/', $username)) {
+        $username = $username . '@wifi-rapidito';
+    } else {
+        $username = $username . '@wifi-rapidito';
+    }
+}
+
 // Step 1: Get CSRF token from login page
 $loginUrl = 'https://clientes.portalinternet.app/accounts/login/?empresa=wifi-rapidito';
 
@@ -35,16 +45,42 @@ curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
 curl_setopt($ch, CURLOPT_HEADER, true);
 curl_setopt($ch, CURLOPT_NOBODY, false);
+curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
+curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
 
 $response = curl_exec($ch);
+$curlError = curl_error($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+if ($response === false || $httpCode !== 200) {
+    curl_close($ch);
+    http_response_code(500);
+    echo json_encode([
+        'error' => 'Failed to obtain CSRF token',
+        'debug' => [
+            'curl_error' => $curlError,
+            'http_code' => $httpCode,
+            'url' => $loginUrl
+        ]
+    ]);
+    exit();
+}
+
 $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
 $headers = substr($response, 0, $headerSize);
 $body = substr($response, $headerSize);
 curl_close($ch);
 
-// Extract CSRF token from HTML
-preg_match('/name=["\']csrfmiddlewaretoken["\'] value=["\'](.*?)["\']/', $body, $matches);
-$csrfToken = $matches[1] ?? '';
+// Extract CSRF token from HTML - try multiple patterns
+$csrfToken = '';
+if (preg_match('/name=["\']csrfmiddlewaretoken["\'] value=["\'](.*?)["\']/', $body, $matches)) {
+    $csrfToken = $matches[1];
+} elseif (preg_match('/value=["\'](.*?)["\'] name=["\']csrfmiddlewaretoken["\']/', $body, $matches)) {
+    $csrfToken = $matches[1];
+}
 
 // Extract session cookie
 preg_match('/Set-Cookie: csrftoken=(.*?);/', $headers, $cookieMatches);
@@ -52,7 +88,14 @@ $csrfCookie = $cookieMatches[1] ?? '';
 
 if (empty($csrfToken) || empty($csrfCookie)) {
     http_response_code(500);
-    echo json_encode(['error' => 'Failed to obtain CSRF token']);
+    echo json_encode([
+        'error' => 'Failed to obtain CSRF token',
+        'debug' => [
+            'csrf_token_found' => !empty($csrfToken),
+            'csrf_cookie_found' => !empty($csrfCookie),
+            'body_length' => strlen($body)
+        ]
+    ]);
     exit();
 }
 
@@ -70,12 +113,17 @@ curl_setopt($ch, CURLOPT_URL, $loginUrl);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false); // Don't follow redirects
+curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
 curl_setopt($ch, CURLOPT_HEADER, true);
+curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
     'Content-Type: application/x-www-form-urlencoded',
     'Cookie: csrftoken=' . $csrfCookie,
-    'Referer: ' . $loginUrl
+    'Referer: ' . $loginUrl,
+    'Origin: https://clientes.portalinternet.app'
 ]);
 
 $loginResponse = curl_exec($ch);
@@ -85,43 +133,31 @@ $responseHeaders = substr($loginResponse, 0, $headerSize);
 $responseBody = substr($loginResponse, $headerSize);
 curl_close($ch);
 
-// Check if login was successful (redirect or 200 OK without error message)
+// Check if login was successful
 $isSuccess = false;
 $sessionId = '';
 
 if ($httpCode == 302 || $httpCode == 301) {
-    // Redirect typically means successful login
+    // Redirect means successful login
     $isSuccess = true;
     
     // Extract session cookie
     preg_match('/Set-Cookie: sessionid=(.*?);/', $responseHeaders, $sessionMatches);
     $sessionId = $sessionMatches[1] ?? '';
 } elseif ($httpCode == 200) {
-    // Check if there's an error message in the response
+    // Check if there's an error message
     if (strpos($responseBody, 'NO ENCONTRADO') === false && 
-        strpos($responseBody, 'incorrecta') === false) {
+        strpos($responseBody, 'incorrecta') === false &&
+        strpos($responseBody, 'SERVICIO NO ENCONTRADO') === false) {
         $isSuccess = true;
     }
 }
 
 if ($isSuccess && !empty($sessionId)) {
-    // Login successful - now fetch user data
-    $dashboardUrl = 'https://clientes.portalinternet.app/dashboard/';
-    
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $dashboardUrl);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Cookie: sessionid=' . $sessionId . '; csrftoken=' . $csrfCookie
-    ]);
-    
-    $dashboardHtml = curl_exec($ch);
-    curl_close($ch);
-    
-    // Extract user info from dashboard (simplified - you can enhance this)
+    // Login successful
     $userData = [
         'role' => 'client',
-        'username' => $username,
+        'username' => str_replace('@wifi-rapidito', '', $username),
         'authenticated' => true,
         'session' => $sessionId
     ];
@@ -136,7 +172,7 @@ if ($isSuccess && !empty($sessionId)) {
     http_response_code(401);
     echo json_encode([
         'success' => false,
-        'error' => 'Usuario o Cédula no encontrado en Wisphub. Verifique que el Usuario o Cédula sea correcto.'
+        'error' => 'Credenciales inválidas. Verifique su usuario/cédula y contraseña.'
     ]);
 }
 ?>

@@ -1,8 +1,5 @@
 import { create } from 'zustand';
-import axios from 'axios';
-
-// Use absolute path for Wisphub auth on production
-const WISPHUB_AUTH_URL = '/wisphub_auth.php';
+import api from '../api/client';
 
 const useAuthStore = create((set, get) => ({
     user: null,
@@ -23,11 +20,11 @@ const useAuthStore = create((set, get) => ({
                 return user;
             }
 
-            // CLIENT LOGIN: Authenticate via Wisphub portal
-            console.log(`[AUTH] Attempting Wisphub portal login for: "${username}"`);
+            // CLIENT LOGIN: Use custom PHP endpoint with pagination
+            console.log(`[AUTH] Login attempt for: "${username}"`);
 
             try {
-                const response = await axios.post(WISPHUB_AUTH_URL, {
+                const response = await api.post('/login_wisphub.php', {
                     username: username.trim(),
                     password: password
                 });
@@ -41,15 +38,16 @@ const useAuthStore = create((set, get) => ({
                     const token = response.data.token;
                     localStorage.setItem('token', token);
                     localStorage.setItem('user_role', 'client');
+                    localStorage.setItem('user_data', JSON.stringify(user)); // PERSIST USER DATA
 
                     set({ user, token, isAuthenticated: true, isLoading: false });
-                    console.log(`[AUTH] ✅ Login successful via Wisphub portal`);
+                    console.log(`[AUTH] ✅ Login successful via pagination endpoint`);
                     return user;
                 } else {
                     throw new Error(response.data.error || 'Error de autenticación');
                 }
             } catch (authError) {
-                console.error(`[AUTH] ❌ Portal authentication failed:`, authError);
+                console.error(`[AUTH] ❌ Login failed:`, authError);
                 const errorMessage = authError.response?.data?.error ||
                     authError.message ||
                     'Usuario o Cédula no encontrado en Wisphub. Verifique que el Usuario o Cédula sea correcto.';
@@ -67,6 +65,7 @@ const useAuthStore = create((set, get) => ({
     logout: () => {
         localStorage.removeItem('token');
         localStorage.removeItem('user_role');
+        localStorage.removeItem('user_data'); // CLEAR USER DATA
         set({ user: null, token: null, isAuthenticated: false, error: null });
     },
 
@@ -90,7 +89,19 @@ const useAuthStore = create((set, get) => ({
             return;
         }
 
-        // For clients, mark as authenticated
+        // For clients, restore user data from localStorage if available
+        const userData = localStorage.getItem('user_data');
+        if (userData) {
+            try {
+                const user = JSON.parse(userData);
+                set({ user, token, isAuthenticated: true });
+                return;
+            } catch (e) {
+                console.error("[AUTH] Error parsing user data:", e);
+            }
+        }
+
+        // Fallback for clients if no data found
         set({
             user: { role: 'client' },
             token,
