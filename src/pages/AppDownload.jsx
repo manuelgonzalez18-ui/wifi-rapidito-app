@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Download, Smartphone, ShieldCheck, Play, ArrowRight, Settings } from 'lucide-react';
+import { Download, Smartphone, ShieldCheck, Play, ArrowRight, Settings, User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const AppDownload = () => {
