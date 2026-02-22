@@ -4,6 +4,7 @@ import ClientDashboard from './pages/Client/Dashboard';
 import PaymentReport from './pages/Client/PaymentReport';
 import Invoices from './pages/Client/Invoices';
 import Support from './pages/Client/Support';
+import AppDownload from './pages/AppDownload';
 import RequestPromise from './pages/Client/RequestPromise';
 import ConfirmPromisePayment from './pages/Client/ConfirmPromisePayment';
 import ConnectionDoctor from './pages/ConnectionDoctor';
@@ -37,6 +38,7 @@ function App() {
   return (
     <Router>
       <Routes>
+        <Route path="/descargar" element={<AppDownload />} />
         <Route path="/login" element={<LoginPage />} />
 
         {/* Secure Admin Monitor & Finance Routes */}
