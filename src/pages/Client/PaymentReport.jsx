@@ -157,7 +157,7 @@ const PaymentReport = () => {
             // Pass id_servicio for WispHub tracking
             if (user?.id_servicio) data.append('id_servicio', user.id_servicio);
 
-            const response = await fetch('/proxy_payments.php', {
+            const response = await fetch('https://wifirapidito.com/proxy_payments.php', {
                 method: 'POST',
                 body: data,
             });
