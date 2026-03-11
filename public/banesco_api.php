@@ -67,8 +67,9 @@ class BanescoAPI {
     /**
      * Consulta una transacción por su ID de pago (Referencia).
      * @param string $paymentId Número de referencia del pago
+     * @param string $customerIdR RIF del cliente que consulta (o del emisor según QA)
      */
-    public static function checkTransaction($paymentId) {
+    public static function checkTransaction($paymentId, $customerIdR = 'J402638850') {
         $token = self::getToken();
         
         $url = BANESCO_API_QA . '/financial-account/transactions';
@@ -81,7 +82,7 @@ class BanescoAPI {
                     'type'        => 'Web'
                 ],
                 'transaction' => [
-                    'customerIdR' => 'J402638850', // RIF de Inversiones Tu Super PC 2013 C.A
+                    'customerIdR' => $customerIdR,
                     'paymentId'   => (string)$paymentId
                 ]
             ]
