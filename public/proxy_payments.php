@@ -38,6 +38,56 @@ const MIME_TYPES = [
     'image/heic',
 ];
 
+// ── FUNCIÓN VALIDACIÓN AUTOMÁTICA BANESCO ────────────────────
+function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago, $totalCobrado, $nombreUser) {
+    // Según Swagger docs: POST /api/facturas/registrar-pago/{id_factura}/
+    $url = 'https://api.wisphub.app/api/facturas/registrar-pago/' . $facturaId . '/';
+    
+    $payload = [
+        'referencia'    => $referencia,
+        'fecha_pago'    => $fechaPago,
+        'total_cobrado' => (float)$totalCobrado,
+        'accion'        => 1, // 1 = Registrar pago y activar el servicio
+        'forma_pago'    => (int)$formaPago
+    ];
+    
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_HTTPHEADER     => [
+            'Authorization: Api-Key ' . WISPHUB_API_KEY,
+            'Content-Type: application/json',
+            'Accept: application/json',
+        ],
+    ]);
+
+    $response  = curl_exec($ch);
+    $httpCode  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlError) {
+        throw new Exception("Error de conexión WispHub (registrar-pago): $curlError");
+    }
+
+    $data = json_decode($response, true);
+
+    if ($httpCode !== 200) {
+        $msg = $data['detail'] ?? (is_array($data['errors'] ?? null) ? $data['errors'][0] : null) ?? "Error HTTP $httpCode en registrar-pago: $response";
+        throw new Exception($msg);
+    }
+
+    return [
+        'success'  => true,
+        'task_id'  => $data['task_id'] ?? null,
+        'messages' => $data['messages'] ?? [],
+    ];
+}
+
 // ── FUNCIÓN PRINCIPAL ──────────────────────────────────────
 function reportarPago($datos, $archivo = null) {
     $url = WISPHUB_API_URL . $datos['factura_id'] . '/';
@@ -130,6 +180,40 @@ try {
         'comprobante_texto' => 'Pago reportado desde portal Wifi Rapidito - Ref: ' . trim($_POST['reference']),
         'nombre_usuario'  => trim($_POST['user_name']),
     ];
+
+    // --- INTEGRACIÓN BANESCO API ---
+    // Si la forma de pago es transferencia (u otra cuenta Banesco vinculada), validamos primero.
+    if ($formaPagoId === 16749) {
+        require_once __DIR__ . '/banesco_api.php';
+        
+        $montoEnviado = $_POST['amount'] ?? 0;
+        
+        $banescoResponse = BanescoAPI::checkTransaction($datos['referencia']);
+        
+        if (!$banescoResponse['success']) {
+            throw new Exception("Banesco: " . $banescoResponse['message']);
+        }
+        
+        // Banesco OK -> Usamos registrar-pago con accion=1
+        $resultado = registrarPagoAutorizado(
+             $datos['factura_id'], 
+             $datos['referencia'], 
+             $datos['fecha_pago'], 
+             $datos['forma_pago'], 
+             $montoEnviado, 
+             $datos['nombre_usuario']
+        );
+        
+        echo json_encode([
+            'status'       => 'success',
+            'wisphub'      => true,
+            'task_id'      => $resultado['task_id'] ?? null,
+            'message'      => '¡Pago validado exitosamente por Banesco y registrado!',
+            'verificar_en' => 'https://wisphub.app/reporte-de-pagos/',
+        ]);
+        exit;
+    }
+    // --- FIN INTEGRACIÓN BANESCO ---
 
     // Archivo adjunto
     $archivo = null;
