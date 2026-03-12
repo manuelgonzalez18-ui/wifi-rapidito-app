@@ -34,7 +34,6 @@ const Sidebar = ({ role }) => {
         { icon: LayoutDashboard, label: 'Resumen', to: '/client' },
         { icon: CreditCard, label: 'Reportar Pagos', to: '/client/payments' },
         { icon: Handshake, label: 'Solicitar Promesa', to: '/client/request-promise' },
-        { icon: CheckSquare, label: 'Reportar Pago Promesa', to: '/client/confirm-payment' },
         { icon: FileText, label: 'Facturas', to: '/client/invoices' },
         { icon: LifeBuoy, label: 'Soporte', to: '/client/support' },
         { icon: Settings, label: 'Configuración', to: '/client/settings' },

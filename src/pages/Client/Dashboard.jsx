@@ -357,7 +357,7 @@ const ClientDashboard = () => {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.45 }}
-                className="grid grid-cols-2 md:grid-cols-3 gap-4"
+                className="grid grid-cols-2 gap-4"
             >
                 <button
                     onClick={() => navigate('/client/payments')}
@@ -372,13 +372,6 @@ const ClientDashboard = () => {
                 >
                     <Handshake className="w-6 h-6 text-purple-400 group-hover:scale-110 transition-transform" />
                     <span className="text-[10px] font-bold text-white tracking-widest uppercase">Solicitar Promesa</span>
-                </button>
-                <button
-                    onClick={() => navigate('/client/confirm-payment')}
-                    className="flex flex-col items-center justify-center gap-3 p-4 glass-panel border-green-500/20 hover:border-green-400/50 bg-green-950/20 group transition-all col-span-2 md:col-span-1"
-                >
-                    <CheckSquare className="w-6 h-6 text-green-400 group-hover:scale-110 transition-transform" />
-                    <span className="text-[10px] font-bold text-white tracking-widest uppercase">Reportar Pago Promesa</span>
                 </button>
             </motion.div>
 

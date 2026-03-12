@@ -136,8 +136,8 @@ const PaymentReport = () => {
             toast.error('La referencia de pago es obligatoria');
             return;
         }
-        if (!/^\d{6}$/.test(refLimpia)) {
-            toast.error('La referencia debe contener exactamente 6 números');
+        if (!/^\d{6,20}$/.test(refLimpia)) {
+            toast.error('La referencia debe contener entre 6 y 20 números');
             return;
         }
 
@@ -310,9 +310,9 @@ const PaymentReport = () => {
                                 <Hash size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-cyan-500/30 group-focus-within:text-cyan-400" />
                                 <input
                                     type="text"
-                                    placeholder="6 dígitos numéricos"
+                                    placeholder="De 6 a 20 dígitos numéricos"
                                     required
-                                    maxLength={6}
+                                    maxLength={20}
                                     value={formData.reference}
                                     onChange={(e) => {
                                         // Solo permite números

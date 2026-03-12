@@ -126,7 +126,6 @@ const RequestPromise = () => {
                                     required
                                 >
                                     <option value="Promesa de Pago">SÓLO PROMESA DE PAGO</option>
-                                    <option value="Abono Mas Promesa de Pago">ABONO + PROMESA DE PAGO</option>
                                 </select>
                                 <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-500/50">
                                     <CheckCircle2 size={16} />
@@ -146,19 +145,7 @@ const RequestPromise = () => {
                         />
                     </div>
 
-                    {/* Mensaje Informativo Condicional */}
-                    {formData.tipo === 'Abono Mas Promesa de Pago' && (
-                        <motion.div
-                            initial={{ opacity: 0, x: -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            className="p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-2xl flex items-start gap-3"
-                        >
-                            <AlertCircle className="text-cyan-400 shrink-0" size={18} />
-                            <p className="text-[10px] text-cyan-200 font-bold uppercase tracking-wider leading-relaxed">
-                                Cargue su comprobante de pago si va a solicitar abono mas promesa de pago.
-                            </p>
-                        </motion.div>
-                    )}
+
 
                     <div className="space-y-2">
                         <label className="text-[10px] font-bold text-cyan-500/50 uppercase tracking-[0.2em] ml-1">

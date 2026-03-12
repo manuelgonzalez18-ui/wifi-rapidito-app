@@ -6,7 +6,6 @@ const MobileNav = () => {
         { icon: LayoutDashboard, label: 'Inicio', to: '/client' },
         { icon: CreditCard, label: 'Pago', to: '/client/payments' },
         { icon: Handshake, label: 'Promesa', to: '/client/request-promise' },
-        { icon: CheckSquare, label: 'Reporte', to: '/client/confirm-payment' },
         { icon: FileText, label: 'Docs', to: '/client/invoices' },
         { icon: LifeBuoy, label: 'Soporte', to: '/client/support' },
     ];
