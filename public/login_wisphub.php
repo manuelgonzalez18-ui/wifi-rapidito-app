@@ -74,45 +74,102 @@ if (empty($user) || empty($pass)) {
 $api_url_base = 'https://api.wisphub.app/api/clientes/';
 $api_key = 'OYIxEv1H.qmnKH5Ck8NvLWw4Tnyoa7PswdhrJlJ9s';
 
-// 1. Obtener usuario (Búsqueda Directa Optimizado)
+// 1. Obtener usuario (Búsqueda OPTIMIZADA v4.0 - Exact Match First)
 $foundClient = null;
 $candidates = [];
-
-// Usamos el nombre simple para la búsqueda inicial (Wisphub busca mejor así)
 $searchSeed = str_replace('@wifi-rapidito', '', strtolower($user));
-$nextUrl = $api_url_base . '?buscar=' . urlencode($searchSeed) . '&limit=100';
-$candidates = [];
-$pageCount = 0;
-$maxPages = 15;
 
-do {
-    $pageCount++;
-    writeLog("Searching Page $pageCount: $nextUrl");
+// --- ESTRATEGIA 1: Búsqueda EXACTA por usuario (ultra rápida, 1 resultado) ---
+$exactUrl = $api_url_base . '?usuario=' . urlencode($user) . '&limit=10';
+writeLog("Strategy 1 - Exact usuario match: $exactUrl");
 
-    $ch = curl_init($nextUrl);
+$ch = curl_init($exactUrl);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Authorization: Api-Key ' . $api_key,
+    'Content-Type: application/json'
+]);
+curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+$response = curl_exec($ch);
+curl_close($ch);
+
+$data = json_decode($response, true);
+if (isset($data['results']) && count($data['results']) > 0) {
+    $candidates = $data['results'];
+    writeLog("Strategy 1 SUCCESS: Found " . count($candidates) . " exact matches");
+}
+
+// --- ESTRATEGIA 2: Si el input es numérico, buscar por cédula ---
+if (empty($candidates) && is_numeric($searchSeed)) {
+    $cedulaUrl = $api_url_base . '?cedula=' . urlencode($searchSeed) . '&limit=10';
+    writeLog("Strategy 2 - Cedula search: $cedulaUrl");
+
+    $ch = curl_init($cedulaUrl);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         'Authorization: Api-Key ' . $api_key,
         'Content-Type: application/json'
     ]);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
     $response = curl_exec($ch);
     curl_close($ch);
 
     $data = json_decode($response, true);
-    if (isset($data['results'])) {
-        $candidates = array_merge($candidates, $data['results']);
+    if (isset($data['results']) && count($data['results']) > 0) {
+        $candidates = $data['results'];
+        writeLog("Strategy 2 SUCCESS: Found " . count($candidates) . " cedula matches");
     }
+}
 
-    $nextUrl = $data['next'] ?? null;
-    if ($nextUrl) {
-        // Enforce HTTPS and .app
-        $nextUrl = str_replace(['http://', 'wisphub.net'], ['https://', 'wisphub.app'], $nextUrl);
+// --- ESTRATEGIA 3: Buscar por servicio (nombre de servicio en mayúsculas) ---
+if (empty($candidates)) {
+    $servicioUrl = $api_url_base . '?servicio=' . urlencode(strtoupper($searchSeed)) . '&limit=10';
+    writeLog("Strategy 3 - Servicio search: $servicioUrl");
+
+    $ch = curl_init($servicioUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Authorization: Api-Key ' . $api_key,
+        'Content-Type: application/json'
+    ]);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    $response = curl_exec($ch);
+    curl_close($ch);
+
+    $data = json_decode($response, true);
+    if (isset($data['results']) && count($data['results']) > 0) {
+        $candidates = $data['results'];
+        writeLog("Strategy 3 SUCCESS: Found " . count($candidates) . " servicio matches");
     }
+}
 
-} while ($nextUrl && $pageCount < $maxPages);
+// --- ESTRATEGIA 4 (Fallback): Búsqueda general con límite pequeño ---
+if (empty($candidates)) {
+    $buscarUrl = $api_url_base . '?buscar=' . urlencode($searchSeed) . '&limit=50';
+    writeLog("Strategy 4 - Fallback buscar: $buscarUrl");
 
-writeLog("Total candidates found in $pageCount pages: " . count($candidates));
+    $ch = curl_init($buscarUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Authorization: Api-Key ' . $api_key,
+        'Content-Type: application/json'
+    ]);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    $response = curl_exec($ch);
+    curl_close($ch);
+
+    $data = json_decode($response, true);
+    if (isset($data['results']) && count($data['results']) > 0) {
+        $candidates = $data['results'];
+        writeLog("Strategy 4 Fallback: Got " . count($candidates) . " candidates from buscar");
+    }
+}
+
+writeLog("Total candidates after all strategies: " . count($candidates));
 
 if (!empty($candidates)) {
     writeLog("Processing " . count($candidates) . " candidates...");
@@ -125,7 +182,7 @@ if (!empty($candidates)) {
         $cedula = $client['cedula'] ?? '';
         $nombre = $client['nombre'] ?? '';
 
-        // --- PREPARAR COMPARACIÓN FLEXIBLE (v3.5 - ULTRA ROBUST) ---
+        // --- PREPARAR COMPARACIÓN FLEXIBLE (v4.0) ---
         $userClean = strtolower(trim($user));
         $userBase = str_replace('@wifi-rapidito', '', $userClean);
         
@@ -138,7 +195,7 @@ if (!empty($candidates)) {
         $nombreClean = strtolower(trim($nombre));
         $cedulaClean = strtolower(trim((string)$cedula));
 
-        // Validación de Identidad Multicapa (v3.7 - Strict Protection)
+        // Validación de Identidad Multicapa (v4.0)
         $matchBy = '';
         if ($uPortalClean === $userClean || $uPortalBase === $userBase) $matchBy = "PortalUser";
         elseif ($uPppoeClean === $userClean || $uPppoeBase === $userBase) $matchBy = "ServiceUser";
@@ -146,7 +203,6 @@ if (!empty($candidates)) {
         elseif (!empty($userBase) && str_replace(' ', '', $nombreClean) === $userBase) $matchBy = "ExactName";
 
         if (empty($matchBy)) {
-            writeLog("Skipping candidate: " . $nombre . " (No strict match for '$userBase')");
             continue;
         }
 
@@ -174,7 +230,7 @@ if (!empty($candidates)) {
         }
     }
 } else {
-    writeLog("API Error or Empty Response in Search");
+    writeLog("API Error or Empty Response in all search strategies");
 }
 
 if ($foundClient) {
