@@ -1,20 +1,28 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Home, FileText, CreditCard, LifeBuoy, Handshake } from 'lucide-react';
+import { Home, FileText, CreditCard, LifeBuoy, Handshake, Users, Activity, Settings } from 'lucide-react';
 import useAuthStore from '../../auth/authStore';
 
 const MobileNav = () => {
     const { user } = useAuthStore();
     const location = useLocation();
 
-    if (user?.role === 'staff') return null;
-
-    const navItems = [
+    const clientItems = [
         { icon: Home, label: 'Inicio', to: '/client' },
         { icon: FileText, label: 'Facturas', to: '/client/invoices' },
         { icon: CreditCard, label: 'Pagos', to: '/client/payments' },
         { icon: Handshake, label: 'Promesa', to: '/client/request-promise' },
         { icon: LifeBuoy, label: 'Soporte', to: '/client/support' },
     ];
+
+    const staffItems = [
+        { icon: Home, label: 'Resumen', to: '/staff' },
+        { icon: LifeBuoy, label: 'Soporte', to: '/staff/support' },
+        { icon: Users, label: 'Clientes', to: '/staff/clients' },
+        { icon: Activity, label: 'Red', to: '/staff/network' },
+        { icon: Settings, label: 'Tools', to: '/staff/tools' },
+    ];
+
+    const navItems = user?.role === 'staff' ? staffItems : clientItems;
 
     return (
         <nav
@@ -23,15 +31,16 @@ const MobileNav = () => {
         >
             <div className="mx-auto flex max-w-lg items-stretch justify-between gap-1">
                 {navItems.map((item) => {
-                    const isActive = item.to === '/client'
-                        ? location.pathname === '/client'
-                        : location.pathname.startsWith(item.to);
+                    const isRoot = ['/client', '/staff'].includes(item.to);
+                    const isActive = isRoot
+                        ? location.pathname === item.to
+                        : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`);
 
                     return (
                         <NavLink
                             key={item.to}
                             to={item.to}
-                            end={item.to === '/client'}
+                            end={isRoot}
                             aria-label={item.label}
                             className={`relative flex min-h-14 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[10px] font-semibold transition ${
                                 isActive ? 'text-cyan-300' : 'text-slate-500 hover:text-slate-200'
