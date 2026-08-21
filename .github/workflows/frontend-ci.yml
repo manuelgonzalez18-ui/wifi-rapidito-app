@@ -131,6 +131,9 @@ jobs:
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
             "mv '$REMOTE_BASE/index.html.next' '$REMOTE_BASE/index.html'"
 
+          printf '%s\n' "$GITHUB_SHA" | ssh -i ~/.ssh/hostinger_deploy -p 65002 \
+            "$HOSTINGER_USER@$HOSTINGER_HOST" "cat > '$REMOTE_BASE/frontend-version.txt'"
+
       - name: Verify Hostinger deployment files
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -141,4 +144,4 @@ jobs:
           set -euo pipefail
           REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
-            "test -s '$REMOTE_BASE/index.html' && test -d '$REMOTE_BASE/assets' && grep -q '/assets/' '$REMOTE_BASE/index.html' && echo 'Hostinger root frontend deployment verified.'"
+            "test -s '$REMOTE_BASE/index.html' && test -d '$REMOTE_BASE/assets' && test -s '$REMOTE_BASE/frontend-version.txt' && grep -q '/assets/' '$REMOTE_BASE/index.html' && echo 'Hostinger root frontend deployment verified.'"
