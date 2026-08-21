@@ -1,5 +1,8 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createElement } from 'react';
 import { AlertCircle, Loader2 } from 'lucide-react';
+
+export { formatMoney, formatDate, normalizeInvoiceStatus, invoiceStatusMeta } from '../../utils/clientUiUtils';
 
 export const PageHeading = ({ eyebrow, title, description, action }) => (
   <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
