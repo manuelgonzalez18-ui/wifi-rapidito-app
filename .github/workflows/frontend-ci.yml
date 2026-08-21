@@ -65,8 +65,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Configure Hostinger SSH
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # Production deploy is intentionally paused while the live Banesco
+      # payment form is recovered and brought back into source control.
+      - name: Configure Hostinger SSH for recovery
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[restore-production]')
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -83,10 +85,10 @@ jobs:
           ssh-keygen -y -f ~/.ssh/hostinger_deploy > /dev/null
           ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/hostinger_deploy -p 65002 -o BatchMode=yes -o ConnectTimeout=15 \
-            "$HOSTINGER_USER@$HOSTINGER_HOST" 'echo "Hostinger SSH connection verified."'
+            "$HOSTINGER_USER@$HOSTINGER_HOST" 'echo "Hostinger SSH recovery connection verified."'
 
-      - name: Backup current Hostinger frontend
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Restore last pre-deploy Hostinger frontend
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[restore-production]')
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -96,51 +98,38 @@ jobs:
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
           BASE="$HOME/domains/wifirapidito.com/public_html"
-          LIVE="$BASE"
           BACKUPS="$BASE/.frontend-backups"
-          mkdir -p "$LIVE/assets" "$BACKUPS"
-          stamp="$(date +%Y%m%d-%H%M%S)"
-          cd "$LIVE"
-          items=()
-          [[ -f index.html ]] && items+=(index.html)
-          [[ -d assets ]] && items+=(assets)
-          if (( ${#items[@]} > 0 )); then
-            tar -czf "$BACKUPS/frontend-$stamp.tar.gz" "${items[@]}"
-          fi
-          find "$BACKUPS" -type f -name 'frontend-*.tar.gz' -mtime +14 -delete || true
+          latest="$(ls -1t "$BACKUPS"/frontend-*.tar.gz 2>/dev/null | head -n 1 || true)"
+          test -n "$latest"
+          test -s "$latest"
+          cd "$BASE"
+          tar -xzf "$latest"
+          test -s "$BASE/index.html"
+          test -d "$BASE/assets"
+          echo "Restored frontend backup: $(basename "$latest")"
           REMOTE
 
-      - name: Deploy frontend assets to Hostinger
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Download recovered production snapshot
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[restore-production]')
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
         shell: bash
         run: |
           set -euo pipefail
-          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
-
-          # Upload generated JS/CSS/assets first. Existing PHP/backend files are preserved.
-          scp -i ~/.ssh/hostinger_deploy -P 65002 -r \
-            dist/assets/. \
-            "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/assets/"
-
-          # Switch root index.html only after every referenced asset is present.
+          LATEST="$(ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            'ls -1t "$HOME"/domains/wifirapidito.com/public_html/.frontend-backups/frontend-*.tar.gz 2>/dev/null | head -n 1')"
+          test -n "$LATEST"
           scp -i ~/.ssh/hostinger_deploy -P 65002 \
-            dist/index.html \
-            "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/index.html.next"
+            "$HOSTINGER_USER@$HOSTINGER_HOST:$LATEST" \
+            production-frontend-backup.tar.gz
+          test -s production-frontend-backup.tar.gz
 
-          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
-            "mv '$REMOTE_BASE/index.html.next' '$REMOTE_BASE/index.html'"
-
-      - name: Verify Hostinger deployment files
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
-          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
-            "test -s '$REMOTE_BASE/index.html' && test -d '$REMOTE_BASE/assets' && grep -q '/assets/' '$REMOTE_BASE/index.html' && echo 'Hostinger root frontend deployment verified.'"
+      - name: Upload recovered production snapshot
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[restore-production]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovered-production-frontend-${{ github.sha }}
+          path: production-frontend-backup.tar.gz
+          if-no-files-found: error
+          retention-days: 14
