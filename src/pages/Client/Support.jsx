@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-    MessageSquare, Plus, Paperclip, X, Send, LifeBuoy,
+    MessageSquare, Plus, Paperclip, X, Send,
     Clock3, Stethoscope, ChevronRight, AlertTriangle, CheckCircle2
 } from 'lucide-react';
 import api from '../../api/client';
@@ -17,6 +17,19 @@ import {
     formatDate,
 } from '../../components/ui/ClientUi';
 
+const SUBJECTS = [
+    'Internet Lento',
+    'No Tiene Internet',
+    'Internet Intermitente',
+    'Cable Fibra Dañado',
+    'Router En Rojo',
+    'Reubicacion Del Router',
+    'Cambio De Contraseña En Router Wifi',
+    'Falla Masiva En Mi Comunidad',
+    'Otro Asunto'
+];
+
+const DEPARTMENTS = ['Soporte Técnico', 'Finanzas', 'Otro'];
 const stripHtml = (value = '') => String(value).replace(/<[^>]*>/g, '').trim();
 
 const ticketTone = (status) => {
@@ -29,6 +42,7 @@ const ticketTone = (status) => {
 
 const Support = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const { user } = useAuthStore();
     const [tickets, setTickets] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -42,20 +56,6 @@ const Support = () => {
     });
     const [file, setFile] = useState(null);
     const [submitting, setSubmitting] = useState(false);
-
-    const subjects = [
-        'Internet Lento',
-        'No Tiene Internet',
-        'Internet Intermitente',
-        'Cable Fibra Dañado',
-        'Router En Rojo',
-        'Reubicacion Del Router',
-        'Cambio De Contraseña En Router Wifi',
-        'Falla Masiva En Mi Comunidad',
-        'Otro Asunto'
-    ];
-
-    const departments = ['Soporte Técnico', 'Finanzas', 'Otro'];
 
     const fetchTickets = async () => {
         if (!user?.id_servicio) {
@@ -90,6 +90,21 @@ const Support = () => {
     useEffect(() => {
         fetchTickets();
     }, [user?.id_servicio]);
+
+    useEffect(() => {
+        if (!location.state?.openTicket) return;
+
+        const subject = SUBJECTS.includes(location.state.subject)
+            ? location.state.subject
+            : 'Otro Asunto';
+
+        setNewItem((current) => ({
+            ...current,
+            asunto: subject,
+            descripcion: location.state.description || current.descripcion,
+        }));
+        setShowNewTicket(true);
+    }, [location.key, location.state]);
 
     const handleSubmit = async (event) => {
         event.preventDefault();
@@ -286,7 +301,7 @@ const Support = () => {
                                         required
                                     >
                                         <option value="" disabled>Selecciona el problema</option>
-                                        {subjects.map((subject) => <option key={subject} value={subject} className="bg-slate-900">{subject}</option>)}
+                                        {SUBJECTS.map((subject) => <option key={subject} value={subject} className="bg-slate-900">{subject}</option>)}
                                     </select>
                                 </div>
 
@@ -298,7 +313,7 @@ const Support = () => {
                                             onChange={(event) => setNewItem({ ...newItem, departamento: event.target.value })}
                                             className="glass-input w-full rounded-xl px-4 py-3 text-sm"
                                         >
-                                            {departments.map((department) => <option key={department} value={department} className="bg-slate-900">{department}</option>)}
+                                            {DEPARTMENTS.map((department) => <option key={department} value={department} className="bg-slate-900">{department}</option>)}
                                         </select>
                                     </div>
                                     <div>
