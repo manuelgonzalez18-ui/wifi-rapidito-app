@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 export const formatMoney = (value) => {
   const amount = Number.parseFloat(value ?? 0);
   return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : '$0.00';
