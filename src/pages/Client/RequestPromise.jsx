@@ -25,12 +25,24 @@ const toInputDate = (date) => {
 const getPromiseDateWindow = () => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const maxDate = new Date(now.getFullYear(), now.getMonth() + 1, 5);
+    const dayOfMonth = today.getDate();
+
+    // La ventana mensual abre el día 13 y se mantiene disponible
+    // hasta el día 5 del mes siguiente. Del 6 al 12 está cerrada.
+    const isOpen = dayOfMonth >= 13 || dayOfMonth <= 5;
+    const maxDate = dayOfMonth <= 5
+        ? new Date(today.getFullYear(), today.getMonth(), 5)
+        : new Date(today.getFullYear(), today.getMonth() + 1, 5);
+    const nextOpenDate = dayOfMonth >= 6 && dayOfMonth <= 12
+        ? new Date(today.getFullYear(), today.getMonth(), 13)
+        : null;
 
     return {
+        isOpen,
         min: toInputDate(today),
         max: toInputDate(maxDate),
         maxDate,
+        nextOpenDate,
     };
 };
 
@@ -151,9 +163,15 @@ const RequestPromise = () => {
     const hasMultipleInvoices = !isLoadingInvoices && pendingInvoices.length > 1;
     const hasNoInvoices = !isLoadingInvoices && pendingInvoices.length === 0;
     const selectedInvoice = hasExactlyOneInvoice ? pendingInvoices[0] : null;
+    const canRequestPromise = promiseWindow.isOpen && hasExactlyOneInvoice;
 
     const handleSubmit = async (event) => {
         event.preventDefault();
+
+        if (!promiseWindow.isOpen) {
+            toast.error('Las promesas de pago solo están disponibles del día 13 al día 5 del mes siguiente');
+            return;
+        }
 
         if (pendingInvoices.length > 1) {
             toast.error('No puedes solicitar promesa si tienes más de una factura pendiente');
@@ -176,7 +194,7 @@ const RequestPromise = () => {
         }
 
         if (formData.fecha < promiseWindow.min || formData.fecha > promiseWindow.max) {
-            toast.error('La fecha debe estar entre hoy y el día 5 del mes siguiente');
+            toast.error('La fecha seleccionada debe estar dentro de la ventana permitida y nunca superar el día 5');
             return;
         }
 
@@ -245,8 +263,23 @@ const RequestPromise = () => {
             <PageHeading
                 eyebrow="Gestiones"
                 title="Promesa de pago"
-                description="El sistema detecta automáticamente tu factura pendiente, registra la promesa en WispHub y solicita la activación del servicio."
+                description="Disponible desde el día 13 de cada mes hasta el día 5 del mes siguiente. El sistema registra la promesa directamente en WispHub."
             />
+
+            {!promiseWindow.isOpen && (
+                <Surface className="flex items-start gap-3 border-amber-400/20 bg-amber-400/[0.05] p-4">
+                    <CalendarDays className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
+                    <div>
+                        <p className="font-semibold text-amber-100">Ventana de promesas cerrada</p>
+                        <p className="mt-1 text-sm leading-6 text-slate-400">
+                            Las solicitudes se habilitan el día 13 de cada mes y pueden registrarse hasta el día 5 del mes siguiente.
+                            {promiseWindow.nextOpenDate && (
+                                <> La próxima apertura será el <strong className="text-slate-200">{promiseWindow.nextOpenDate.toLocaleDateString()}</strong>.</>
+                            )}
+                        </p>
+                    </div>
+                </Surface>
+            )}
 
             {hasMultipleInvoices && (
                 <Surface className="flex items-start gap-3 border-red-400/20 bg-red-400/[0.05] p-4">
@@ -272,7 +305,7 @@ const RequestPromise = () => {
                 </Surface>
             )}
 
-            <Surface className={`p-5 sm:p-7 ${hasMultipleInvoices || hasNoInvoices ? 'opacity-60' : ''}`}>
+            <Surface className={`p-5 sm:p-7 ${!canRequestPromise ? 'opacity-60' : ''}`}>
                 <div className="mb-6 flex items-start gap-4 rounded-xl border border-cyan-400/10 bg-cyan-400/[0.035] p-4">
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-400/10 text-cyan-300">
                         <Handshake size={19} />
@@ -309,7 +342,7 @@ const RequestPromise = () => {
                                     placeholder="Ej. 04121234567"
                                     className="glass-input w-full rounded-xl py-3 pl-11 pr-4 text-sm"
                                     required
-                                    disabled={!hasExactlyOneInvoice || isLoading}
+                                    disabled={!canRequestPromise || isLoading}
                                 />
                             </div>
                         </div>
@@ -354,12 +387,18 @@ const RequestPromise = () => {
                                 onChange={(event) => setFormData({ ...formData, fecha: event.target.value })}
                                 className="glass-input w-full rounded-xl py-3 pl-11 pr-4 text-sm"
                                 required
-                                disabled={!hasExactlyOneInvoice || isLoading}
+                                disabled={!canRequestPromise || isLoading}
                             />
                         </div>
-                        <p className="mt-2 text-xs text-amber-300/70">
-                            Fecha máxima permitida por el sistema: {promiseWindow.maxDate.toLocaleDateString()} — día 5 del mes siguiente.
-                        </p>
+                        {promiseWindow.isOpen ? (
+                            <p className="mt-2 text-xs text-amber-300/70">
+                                Fecha máxima permitida: {promiseWindow.maxDate.toLocaleDateString()}. Después del día 5 la ventana se cierra hasta el día 13.
+                            </p>
+                        ) : (
+                            <p className="mt-2 text-xs text-amber-300/70">
+                                La selección de fecha estará disponible nuevamente el día 13.
+                            </p>
+                        )}
                     </div>
 
                     <div>
@@ -370,13 +409,13 @@ const RequestPromise = () => {
                             onChange={(event) => setFormData({ ...formData, comentarios: event.target.value })}
                             placeholder="Ej. Realizaré el pago el viernes por la mañana…"
                             className="glass-input min-h-28 w-full resize-y rounded-xl px-4 py-3 text-sm"
-                            disabled={!hasExactlyOneInvoice || isLoading}
+                            disabled={!canRequestPromise || isLoading}
                         />
                     </div>
 
                     <button
                         type="submit"
-                        disabled={!hasExactlyOneInvoice || !formData.fecha || isLoading}
+                        disabled={!canRequestPromise || !formData.fecha || isLoading}
                         className="primary-action w-full py-3.5 disabled:cursor-not-allowed disabled:opacity-50 sm:min-w-64"
                     >
                         {isLoading ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" /> : <Send size={17} />}
@@ -388,9 +427,9 @@ const RequestPromise = () => {
             <Surface className="flex items-start gap-3 border-cyan-400/15 bg-cyan-400/[0.035] p-4">
                 <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-cyan-300" />
                 <div>
-                    <p className="font-semibold text-cyan-100">Activación automática</p>
+                    <p className="font-semibold text-cyan-100">Regla de la promesa</p>
                     <p className="mt-1 text-sm leading-6 text-slate-400">
-                        La promesa no confirma un pago. Registra un compromiso de pago en WispHub y solicita la activación automática asociada. Debes pagar antes de la fecha seleccionada para evitar una nueva suspensión.
+                        La ventana abre el día 13, permanece disponible hasta el día 5 del mes siguiente y se cierra del 6 al 12. La promesa no confirma un pago: registra el compromiso en WispHub y solicita la activación automática asociada.
                     </p>
                 </div>
             </Surface>
