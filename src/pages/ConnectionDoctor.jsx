@@ -10,6 +10,7 @@ const ISSUES = [
     {
         id: 'offline',
         title: 'No tengo internet',
+        ticketSubject: 'No Tiene Internet',
         description: 'No navega ningún dispositivo.',
         icon: WifiOff,
         steps: [
@@ -22,6 +23,7 @@ const ISSUES = [
     {
         id: 'los',
         title: 'La luz LOS está roja',
+        ticketSubject: 'Router En Rojo',
         description: 'La ONU muestra una alarma roja.',
         icon: RadioTower,
         steps: [
@@ -34,6 +36,7 @@ const ISSUES = [
     {
         id: 'slow',
         title: 'Internet lento',
+        ticketSubject: 'Internet Lento',
         description: 'Navega, pero con poca velocidad.',
         icon: Gauge,
         steps: [
@@ -46,6 +49,7 @@ const ISSUES = [
     {
         id: 'wifi',
         title: 'Problema con el Wi‑Fi',
+        ticketSubject: 'Otro Asunto',
         description: 'La señal no llega bien a algunas áreas.',
         icon: Wifi,
         steps: [
@@ -64,6 +68,7 @@ const ConnectionDoctor = () => {
     const [resolved, setResolved] = useState(false);
 
     const issue = useMemo(() => ISSUES.find((item) => item.id === issueId), [issueId]);
+    const IssueIcon = issue?.icon;
 
     const chooseIssue = (id) => {
         setIssueId(id);
@@ -80,6 +85,17 @@ const ConnectionDoctor = () => {
     const nextStep = () => {
         if (!issue) return;
         if (step < issue.steps.length - 1) setStep((current) => current + 1);
+    };
+
+    const createTicket = () => {
+        if (!issue) return;
+        navigate('/client/support', {
+            state: {
+                openTicket: true,
+                subject: issue.ticketSubject,
+                description: `Realicé el diagnóstico guiado para “${issue.title}” y el problema continúa.`
+            }
+        });
     };
 
     return (
@@ -141,7 +157,7 @@ const ConnectionDoctor = () => {
                     <Surface className="p-5">
                         <div className="flex items-start gap-3">
                             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-400/10 text-cyan-300">
-                                <issue.icon size={19} />
+                                {IssueIcon ? <IssueIcon size={19} /> : null}
                             </span>
                             <div>
                                 <StatusPill tone="info">Paso {step + 1} de {issue.steps.length}</StatusPill>
@@ -172,11 +188,7 @@ const ConnectionDoctor = () => {
                                         No, continuar <ArrowRight size={16} />
                                     </button>
                                 ) : (
-                                    <button
-                                        type="button"
-                                        onClick={() => navigate('/client/support', { state: { openTicket: true, issue: issue.title } })}
-                                        className="secondary-action flex-1"
-                                    >
+                                    <button type="button" onClick={createTicket} className="secondary-action flex-1">
                                         <LifeBuoy size={16} /> Crear ticket
                                     </button>
                                 )}
