@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import api from '../api/client';
 
-const useAuthStore = create((set, get) => ({
+const useAuthStore = create((set) => ({
     user: null,
     token: localStorage.getItem('token'),
     isAuthenticated: !!localStorage.getItem('token'),
@@ -38,19 +38,19 @@ const useAuthStore = create((set, get) => ({
                     const token = response.data.token;
                     localStorage.setItem('token', token);
                     localStorage.setItem('user_role', 'client');
-                    localStorage.setItem('user_data', JSON.stringify(user)); // PERSIST USER DATA
+                    localStorage.setItem('user_data', JSON.stringify(user));
 
                     set({ user, token, isAuthenticated: true, isLoading: false });
-                    console.log(`[AUTH] ✅ Login successful via pagination endpoint`);
+                    console.log('[AUTH] ✅ Login successful via pagination endpoint');
                     return user;
                 } else {
                     throw new Error(response.data.error || 'Error de autenticación');
                 }
             } catch (authError) {
-                console.error(`[AUTH] ❌ Login failed:`, authError);
+                console.error('[AUTH] ❌ Login failed:', authError);
                 const errorMessage = authError.response?.data?.error ||
                     authError.message ||
-                    'Usuario o Cédula no encontrado en Wisphub. Verifique que el Usuario o Cédula sea correcto.';
+                    'Usuario no encontrado en WispHub. Verifica que hayas escrito tu nombre y apellido pegados en minúsculas.';
                 throw new Error(errorMessage);
             }
 
@@ -65,7 +65,7 @@ const useAuthStore = create((set, get) => ({
     logout: () => {
         localStorage.removeItem('token');
         localStorage.removeItem('user_role');
-        localStorage.removeItem('user_data'); // CLEAR USER DATA
+        localStorage.removeItem('user_data');
         set({ user: null, token: null, isAuthenticated: false, error: null });
     },
 
@@ -96,8 +96,8 @@ const useAuthStore = create((set, get) => ({
                 const user = JSON.parse(userData);
                 set({ user, token, isAuthenticated: true });
                 return;
-            } catch (e) {
-                console.error("[AUTH] Error parsing user data:", e);
+            } catch (error) {
+                console.error('[AUTH] Error parsing user data:', error);
             }
         }
 
