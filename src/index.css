@@ -4,101 +4,299 @@
   --font-sans: 'Outfit', 'Inter', sans-serif;
   --font-display: 'Syncopate', sans-serif;
 
-  /* Holographic HUD Palette */
   --color-neon-blue: #00f3ff;
   --color-neon-purple: #7000ff;
   --color-cyber-dark: #050b14;
   --color-tech-alert: #ff2a6d;
-  
-  --animate-fade-in: fadeIn 0.5s ease-out;
-  --animate-slide-up: slideUp 0.5s ease-out;
+
+  --animate-fade-in: fadeIn 0.35s ease-out;
+  --animate-slide-up: slideUp 0.4s ease-out;
   --animate-pulse-slow: pulseGlow 4s ease-in-out infinite;
-  --animate-scanline: scanline 8s linear infinite;
 
   @keyframes pulseGlow {
-    0%, 100% { box-shadow: 0 0 5px rgba(0, 243, 255, 0.1); }
-    50% { box-shadow: 0 0 20px rgba(0, 243, 255, 0.3); }
+    0%, 100% { box-shadow: 0 0 5px rgba(0, 243, 255, 0.08); }
+    50% { box-shadow: 0 0 18px rgba(0, 243, 255, 0.18); }
   }
 }
 
-/* Custom Base & Components */
-@layer base {
-  body {
-    @apply bg-cyber-dark text-slate-100 antialiased font-sans;
-    background-image: 
-      radial-gradient(circle at 50% 0%, rgba(0, 243, 255, 0.1) 0%, transparent 50%),
-      linear-gradient(0deg, rgba(5, 11, 20, 1) 0%, rgba(5, 11, 20, 0.8) 100%);
-    background-attachment: fixed;
-  }
+:root {
+  color-scheme: dark;
+  background: #050b14;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: #050b14;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 85% -5%, rgba(6, 182, 212, 0.11), transparent 30rem),
+    radial-gradient(circle at 15% 0%, rgba(79, 70, 229, 0.07), transparent 24rem),
+    #050b14;
+  color: #e2e8f0;
+  font-family: 'Outfit', 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a {
+  touch-action: manipulation;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.9);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.25);
+  color: white;
 }
 
 @layer components {
-  /* Holographic HUD Panel */
+  .app-surface,
   .glass-panel {
-    background: rgba(10, 20, 40, 0.4); /* Darker, clearer glass */
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(0, 243, 255, 0.15); /* Thin Cyan Border */
-    box-shadow: 
-      0 0 30px -10px rgba(0, 243, 255, 0.1), /* Outer Glow */
-      inset 0 0 20px rgba(0, 243, 255, 0.05); /* Inner Glow */
     position: relative;
     overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.13);
+    border-radius: 1.25rem;
+    background: linear-gradient(145deg, rgba(15, 23, 42, 0.78), rgba(7, 15, 29, 0.72));
+    box-shadow: 0 18px 50px -30px rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
   }
 
-  /* Decorative Corner Accents for HUD feel */
+  .app-surface::before,
   .glass-panel::before {
     content: '';
     position: absolute;
-    top: 0; left: 0; width: 20px; height: 20px;
-    border-top: 1px solid rgba(0, 243, 255, 0.6);
-    border-left: 1px solid rgba(0, 243, 255, 0.6);
-    border-top-left-radius: 8px;
-    opacity: 0.8;
+    inset: 0 auto auto 0;
+    width: 5rem;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(34, 211, 238, 0.7), transparent);
     pointer-events: none;
   }
+
   .glass-panel::after {
-    content: '';
-    position: absolute;
-    bottom: 0; right: 0; width: 20px; height: 20px;
-    border-bottom: 1px solid rgba(0, 243, 255, 0.6);
-    border-right: 1px solid rgba(0, 243, 255, 0.6);
-    border-bottom-right-radius: 8px;
-    opacity: 0.8;
-    pointer-events: none;
+    display: none;
   }
 
   .glass-input {
-    background: rgba(0, 10, 20, 0.6);
-    backdrop-filter: blur(4px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-bottom: 1px solid rgba(0, 243, 255, 0.3); /* Underline style */
-    color: #e2e8f0;
-    font-family: 'Outfit', monospace; /* Tech feel */
-    letter-spacing: 0.02em;
-    transition: all 0.3s ease;
+    min-height: 44px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(2, 6, 23, 0.5);
+    color: #f8fafc;
+    transition: border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
   }
 
   .glass-input:focus {
-    background: rgba(0, 243, 255, 0.05);
-    border-color: rgba(0, 243, 255, 0.6);
-    box-shadow: 0 4px 20px -5px rgba(0, 243, 255, 0.2);
+    border-color: rgba(34, 211, 238, 0.55);
+    background: rgba(8, 47, 73, 0.18);
+    box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.08);
     outline: none;
   }
 
   .neon-text {
-    color: #00f3ff;
-    text-shadow: 0 0 10px rgba(0, 243, 255, 0.6);
+    color: #f8fafc;
+    text-shadow: none;
   }
-  
-  /* Buttons */
-  button {
-    letter-spacing: 0.05em; /* Spacer text for tech buttons */
+
+  .app-eyebrow {
+    margin-bottom: 0.5rem;
+    color: rgb(34 211 238);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .app-page-title {
+    margin: 0;
+    color: white;
+    font-size: clamp(1.65rem, 5vw, 2.35rem);
+    font-weight: 750;
+    line-height: 1.08;
+    letter-spacing: -0.035em;
+  }
+
+  .app-page-description {
+    max-width: 44rem;
+    margin-top: 0.65rem;
+    color: rgb(148 163 184);
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 28px;
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    border-radius: 999px;
+    padding: 0.25rem 0.65rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .status-pill-success {
+    border-color: rgba(74, 222, 128, 0.25);
+    background: rgba(34, 197, 94, 0.1);
+    color: rgb(134 239 172);
+  }
+
+  .status-pill-warning {
+    border-color: rgba(251, 191, 36, 0.25);
+    background: rgba(245, 158, 11, 0.1);
+    color: rgb(253 224 71);
+  }
+
+  .status-pill-danger {
+    border-color: rgba(248, 113, 113, 0.28);
+    background: rgba(239, 68, 68, 0.1);
+    color: rgb(252 165 165);
+  }
+
+  .status-pill-info {
+    border-color: rgba(34, 211, 238, 0.25);
+    background: rgba(6, 182, 212, 0.1);
+    color: rgb(103 232 249);
+  }
+
+  .status-pill-neutral {
+    background: rgba(148, 163, 184, 0.08);
+    color: rgb(203 213 225);
+  }
+
+  .quick-action-icon {
+    display: inline-flex;
+    width: 2.75rem;
+    height: 2.75rem;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 0.9rem;
+  }
+
+  .quick-action-cyan {
+    background: rgba(6, 182, 212, 0.1);
+    color: rgb(103 232 249);
+  }
+
+  .quick-action-emerald {
+    background: rgba(16, 185, 129, 0.1);
+    color: rgb(110 231 183);
+  }
+
+  .quick-action-amber {
+    background: rgba(245, 158, 11, 0.1);
+    color: rgb(253 230 138);
+  }
+
+  .quick-action-violet {
+    background: rgba(139, 92, 246, 0.1);
+    color: rgb(196 181 253);
+  }
+
+  .primary-action {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.85rem;
+    background: linear-gradient(135deg, rgb(8 145 178), rgb(37 99 235));
+    padding: 0.7rem 1rem;
+    color: white;
+    font-size: 0.875rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    box-shadow: 0 10px 28px -16px rgba(34, 211, 238, 0.8);
+    transition: transform 160ms ease, filter 160ms ease;
+  }
+
+  .primary-action:hover {
+    filter: brightness(1.08);
+  }
+
+  .primary-action:active {
+    transform: translateY(1px);
+  }
+
+  .secondary-action {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    border-radius: 0.85rem;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 0.7rem 1rem;
+    color: rgb(226 232 240);
+    font-size: 0.875rem;
+    font-weight: 650;
+    letter-spacing: 0;
+    transition: background 160ms ease, border-color 160ms ease;
+  }
+
+  .secondary-action:hover {
+    border-color: rgba(34, 211, 238, 0.25);
+    background: rgba(255, 255, 255, 0.07);
   }
 }
 
-/* Replaces old mesh gradient with a subtle Starfield/Grid hint if needed, 
-   but we used body bg instead for cleaner look */
 .mesh-bg {
-    background: transparent; 
+  background: transparent;
+}
+
+.safe-bottom {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+@media (max-width: 767px) {
+  .app-surface,
+  .glass-panel {
+    border-radius: 1rem;
+  }
+
+  body {
+    background:
+      radial-gradient(circle at 100% 0%, rgba(6, 182, 212, 0.09), transparent 18rem),
+      #050b14;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
