@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Use Node.js 22
         uses: actions/setup-node@v4
@@ -28,22 +30,33 @@ jobs:
         run: npm ci
 
       - name: Lint changed frontend files
-        if: github.event_name == 'pull_request'
         shell: bash
         run: |
-          BASE="${GITHUB_BASE_REF:-main}"
-          git fetch origin "$BASE" --depth=1
-          mapfile -t FILES < <(git diff --name-only --diff-filter=ACMR "origin/$BASE" HEAD -- src | grep -E '\.(js|jsx)$' || true)
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE="${GITHUB_BASE_REF:-main}"
+            git fetch origin "$BASE" --depth=1
+            DIFF_BASE="origin/$BASE"
+          else
+            DIFF_BASE="HEAD^"
+          fi
+
+          mapfile -t FILES < <(git diff --name-only --diff-filter=ACMR "$DIFF_BASE" HEAD -- src | grep -E '\.(js|jsx)$' || true)
           if (( ${#FILES[@]} == 0 )); then
             echo "No changed frontend JavaScript files to lint."
             exit 0
           fi
+
           printf 'Linting %s\n' "${FILES[@]}"
           npx eslint "${FILES[@]}"
 
-      - name: Lint frontend source on main
-        if: github.event_name == 'push'
-        run: npx eslint src
-
       - name: Build
         run: npm run build
+
+      - name: Upload Hostinger dist
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hostinger-dist-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
