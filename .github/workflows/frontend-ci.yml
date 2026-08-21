@@ -69,26 +69,31 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_PORT: ${{ secrets.HOSTINGER_PORT }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
           HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
         shell: bash
         run: |
           set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
           mkdir -p ~/.ssh
-          printf '%s\n' "$HOSTINGER_SSH_KEY" > ~/.ssh/hostinger_deploy
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
           chmod 600 ~/.ssh/hostinger_deploy
-          ssh-keyscan -p "$HOSTINGER_PORT" -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy > /dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 -o BatchMode=yes -o ConnectTimeout=15 \
+            "$HOSTINGER_USER@$HOSTINGER_HOST" 'echo "Hostinger SSH connection verified."'
 
       - name: Backup current Hostinger frontend
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_PORT: ${{ secrets.HOSTINGER_PORT }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/hostinger_deploy -p "$HOSTINGER_PORT" "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
           BASE="$HOME/domains/wifirapidito.com/public_html"
           LIVE="$BASE/dist"
@@ -109,7 +114,6 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_PORT: ${{ secrets.HOSTINGER_PORT }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
         shell: bash
         run: |
@@ -117,27 +121,26 @@ jobs:
           REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html/dist"
 
           # Upload generated JS/CSS/assets first. Existing server files are preserved.
-          scp -i ~/.ssh/hostinger_deploy -P "$HOSTINGER_PORT" -r \
+          scp -i ~/.ssh/hostinger_deploy -P 65002 -r \
             dist/assets/. \
             "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/assets/"
 
           # Switch index.html only after every referenced asset is present.
-          scp -i ~/.ssh/hostinger_deploy -P "$HOSTINGER_PORT" \
+          scp -i ~/.ssh/hostinger_deploy -P 65002 \
             dist/index.html \
             "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/index.html.next"
 
-          ssh -i ~/.ssh/hostinger_deploy -p "$HOSTINGER_PORT" "$HOSTINGER_USER@$HOSTINGER_HOST" \
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
             "mv '$REMOTE_BASE/index.html.next' '$REMOTE_BASE/index.html'"
 
       - name: Verify Hostinger deployment files
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_PORT: ${{ secrets.HOSTINGER_PORT }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
         shell: bash
         run: |
           set -euo pipefail
           REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html/dist"
-          ssh -i ~/.ssh/hostinger_deploy -p "$HOSTINGER_PORT" "$HOSTINGER_USER@$HOSTINGER_HOST" \
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
             "test -s '$REMOTE_BASE/index.html' && test -d '$REMOTE_BASE/assets' && echo 'Hostinger frontend deployment verified.'"
