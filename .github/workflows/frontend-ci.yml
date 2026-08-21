@@ -27,7 +27,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint frontend source
+      - name: Lint changed frontend files
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          BASE="${GITHUB_BASE_REF:-main}"
+          git fetch origin "$BASE" --depth=1
+          mapfile -t FILES < <(git diff --name-only --diff-filter=ACMR "origin/$BASE" HEAD -- src | grep -E '\.(js|jsx)$' || true)
+          if (( ${#FILES[@]} == 0 )); then
+            echo "No changed frontend JavaScript files to lint."
+            exit 0
+          fi
+          printf 'Linting %s\n' "${FILES[@]}"
+          npx eslint "${FILES[@]}"
+
+      - name: Lint frontend source on main
+        if: github.event_name == 'push'
         run: npx eslint src
 
       - name: Build
