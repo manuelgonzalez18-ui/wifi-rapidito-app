@@ -2,7 +2,7 @@ import { motion } from 'framer-motion';
 import { Download, Smartphone, ShieldCheck, Play, ArrowRight, Settings, User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
-const APK_VERSION = '6.0.1';
+const APK_VERSION = '6.0.2';
 const APK_FILE = `Wifi-Rapidito-${APK_VERSION}.apk`;
 
 const AppDownload = () => {
