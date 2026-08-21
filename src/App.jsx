@@ -1,4 +1,4 @@
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import useAuthStore from './auth/authStore';
@@ -50,6 +50,19 @@ const Placeholder = ({ title, description }) => (
 );
 
 function App() {
+  const loadUser = useAuthStore((state) => state.loadUser);
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    Promise.resolve(loadUser()).finally(() => {
+      if (mounted) setAuthReady(true);
+    });
+    return () => { mounted = false; };
+  }, [loadUser]);
+
+  if (!authReady) return <RouteLoader />;
+
   return (
     <Router>
       <Suspense fallback={<RouteLoader />}>
