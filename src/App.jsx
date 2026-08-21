@@ -11,6 +11,7 @@ const PaymentReport = lazy(() => import('./pages/Client/PaymentReport'));
 const Invoices = lazy(() => import('./pages/Client/Invoices'));
 const InvoiceDetail = lazy(() => import('./pages/Client/InvoiceDetail'));
 const Support = lazy(() => import('./pages/Client/Support'));
+const Settings = lazy(() => import('./pages/Client/Settings'));
 const AppDownload = lazy(() => import('./pages/AppDownload'));
 const RequestPromise = lazy(() => import('./pages/Client/RequestPromise'));
 const ConfirmPromisePayment = lazy(() => import('./pages/Client/ConfirmPromisePayment'));
@@ -81,7 +82,7 @@ function App() {
               <Route path="confirm-payment" element={<ConfirmPromisePayment />} />
               <Route path="payment-story" element={<PaymentStoryView />} />
               <Route path="doctor" element={<ConnectionDoctor />} />
-              <Route path="settings" element={<Placeholder title="Configuración" description="Aquí se concentrarán tus preferencias y datos de contacto." />} />
+              <Route path="settings" element={<Settings />} />
             </Route>
 
             <Route path="/staff" element={<ProtectedRoute role="staff"><Outlet /></ProtectedRoute>}>
