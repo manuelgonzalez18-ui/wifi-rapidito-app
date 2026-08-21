@@ -1,5 +1,5 @@
+import { createElement } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { motion } from 'framer-motion';
 import {
     LogOut, Wifi, User, LayoutDashboard, CreditCard,
     LifeBuoy, Users, Activity, Settings, FileText, Handshake
@@ -7,15 +7,10 @@ import {
 import useAuthStore from '../../auth/authStore';
 import { cn } from '../../utils';
 
-const NavItem = ({ icon: Icon, label, to, active }) => (
+const NavItem = ({ icon, label, to, active }) => (
     <Link to={to} className="relative block px-3 py-1 group">
         {active ? (
-            <motion.div
-                layoutId="activeNav"
-                className="absolute inset-1 rounded-xl border border-cyan-400/15 bg-cyan-400/[0.07]"
-                initial={false}
-                transition={{ type: 'spring', stiffness: 320, damping: 32 }}
-            />
+            <div className="absolute inset-1 rounded-xl border border-cyan-400/15 bg-cyan-400/[0.07]" />
         ) : null}
         <div className={cn(
             'relative flex min-h-11 items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm transition-colors',
@@ -23,10 +18,10 @@ const NavItem = ({ icon: Icon, label, to, active }) => (
                 ? 'font-semibold text-white'
                 : 'text-slate-400 group-hover:bg-white/[0.04] group-hover:text-white'
         )}>
-            <Icon
-                size={19}
-                className={cn(active ? 'text-cyan-300' : 'text-slate-500 group-hover:text-cyan-300')}
-            />
+            {createElement(icon, {
+                size: 19,
+                className: cn(active ? 'text-cyan-300' : 'text-slate-500 group-hover:text-cyan-300')
+            })}
             <span>{label}</span>
         </div>
     </Link>
