@@ -167,7 +167,7 @@ const PaymentReport = () => {
             if (response.ok && result.status === 'success') {
                 setSuccess(true);
                 setWisphubSuccess(result.wisphub === true);
-                toast.success(result.wisphub ? '¡Pago registrado en WispHub!' : 'Reporte recibido por administración');
+                toast.success(result.wisphub ? '¡Pago confirmado y registrado en WispHub!' : 'Reporte recibido por administración');
             } else {
                 const apiError = result.errors?.[0] || result.messages?.[0] || result.message || 'Error en el servidor de Wisphub';
                 throw new Error(apiError);
@@ -191,12 +191,12 @@ const PaymentReport = () => {
                     <CheckCircle className="w-10 h-10 text-green-400" />
                 </div>
                 <h2 className="text-3xl font-bold text-white mb-4 font-display text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-500">
-                    {wisphubSuccess ? '¡PAGO REGISTRADO!' : '¡REPORTE RECIBIDO!'}
+                    {wisphubSuccess ? '¡PAGO CONFIRMADO!' : '¡REPORTE RECIBIDO!'}
                 </h2>
                 <p className="text-cyan-200/70 mb-8 max-w-md mx-auto">
                     {wisphubSuccess
-                        ? 'Tu pago ha sido registrado automáticamente en el sistema. Será verificado por administración.'
-                        : 'Tu reporte fue enviado a administración por correo electrónico. Recibirás confirmación cuando el pago sea validado.'
+                        ? 'Banesco validó tu pago y WispHub confirmó la factura. Si tu servicio estaba suspendido, la activación fue procesada automáticamente.'
+                        : 'Tu reporte fue recibido. Te mostraremos la confirmación cuando la validación correspondiente haya finalizado.'
                     }
                 </p>
                 <div className="flex flex-col sm:flex-row gap-4">
@@ -229,7 +229,7 @@ const PaymentReport = () => {
                 </button>
                 <div>
                     <h1 className="text-2xl font-bold text-white font-display tracking-tight uppercase">Reportar Pago</h1>
-                    <p className="text-cyan-500/50 text-[10px] font-mono tracking-widest uppercase">:: Formulario de Validación de Transacciones ::</p>
+                    <p className="text-cyan-500/50 text-[10px] font-mono tracking-widest uppercase">:: Formulario requerido para validación Banesco ::</p>
                 </div>
             </div>
 
@@ -407,13 +407,13 @@ const PaymentReport = () => {
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
                         <span className="relative z-10 flex items-center justify-center gap-3">
                             {loading ? (
-                                <>SINCRONIZANDO <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/20 border-t-white" /> </>
+                                <>VALIDANDO CON BANESCO <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/20 border-t-white" /> </>
                             ) : (
                                 <>VALIDAR PAGO <Send size={20} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" /> </>
                             )}
                         </span>
                     </button>
-                    <p className="text-center text-[8px] text-cyan-500/30 font-mono tracking-widest uppercase">Seguridad SSL Activa :: Conexión Encriptada con Wisphub</p>
+                    <p className="text-center text-[8px] text-cyan-500/30 font-mono tracking-widest uppercase">Validación Banesco :: Registro automático en WispHub</p>
                 </motion.div>
             </form>
 
@@ -426,7 +426,7 @@ const PaymentReport = () => {
                     <AlertCircle className="text-cyan-400 shrink-0" size={20} />
                 </div>
                 <p className="text-[10px] text-cyan-200/50 uppercase tracking-[0.1em] font-mono leading-relaxed max-w-2xl">
-                    <span className="text-cyan-400 font-bold">AVISO:</span> EL REPORTE SERÁ VERIFICADO MANUALMENTE POR ADMINISTRACIÓN. POR FAVOR, ASEGÚRESE DE QUE EL COMPROBANTE SEA LEGIBLE PARA EVITAR RETRASOS EN EL PROCESO.
+                    <span className="text-cyan-400 font-bold">IMPORTANTE:</span> LOS DATOS DEBEN COINCIDIR CON LA OPERACIÓN EN BANESCO. CUANDO BANESCO VALIDA EL PAGO, EL SISTEMA LO REGISTRA EN WISPHUB Y PROCESA AUTOMÁTICAMENTE LA ACTIVACIÓN DEL SERVICIO SI CORRESPONDE.
                 </p>
             </motion.div>
         </div>

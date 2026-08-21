@@ -5,17 +5,13 @@ import MobileNav from '../components/layout/MobileNav';
 
 const DashboardLayout = () => {
     const { user } = useAuthStore();
-
-    // Fallback role if user is null (should normally be handled by Redirect)
     const role = user?.role || 'client';
 
     return (
-        <div className="min-h-screen bg-[#020617] flex relative">
+        <div className="min-h-screen bg-[#050b14] text-slate-100">
             <Sidebar role={role} />
-            <main className="flex-1 md:ml-64 p-4 md:p-8 overflow-y-auto h-screen relative pb-24 md:pb-8">
-                {/* Background Decor */}
-                <div className="fixed top-0 right-0 w-[500px] h-[500px] bg-primary-100/50 rounded-full blur-[100px] -z-10 pointer-events-none" />
-                <div className="max-w-7xl mx-auto">
+            <main className="min-h-screen md:ml-64">
+                <div className="mx-auto w-full max-w-7xl px-4 pb-28 pt-5 sm:px-6 sm:pt-7 md:px-8 md:pb-10 md:pt-8">
                     <Outlet />
                 </div>
             </main>

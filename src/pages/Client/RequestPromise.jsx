@@ -1,11 +1,8 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Handshake, Phone, Calendar, Upload, Send, User, CheckCircle2, ShieldCheck, AlertCircle } from 'lucide-react';
+import { CalendarDays, Handshake, Paperclip, Phone, Send, UserRound, AlertCircle } from 'lucide-react';
 import useAuthStore from '../../auth/authStore';
-import Button from '../../components/ui/Button';
-import Input from '../../components/ui/Input';
 import toast from 'react-hot-toast';
-import { cn } from '../../utils';
+import { PageHeading, Surface } from '../../components/ui/ClientUi';
 
 const RequestPromise = () => {
     const { user } = useAuthStore();
@@ -17,21 +14,20 @@ const RequestPromise = () => {
         comprobante: null
     });
 
-    const handleFileChange = (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            if (file.size > 5 * 1024 * 1024) {
-                toast.error('El archivo no debe superar los 5MB');
-                return;
-            }
-            setFormData({ ...formData, comprobante: file });
+    const handleFileChange = (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        if (file.size > 5 * 1024 * 1024) {
+            toast.error('El archivo no debe superar los 5 MB');
+            return;
         }
+
+        setFormData((current) => ({ ...current, comprobante: file }));
     };
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-
-        // VALIDACIÓN: Ya no es obligatorio el comprobante
+    const handleSubmit = async (event) => {
+        event.preventDefault();
         setIsLoading(true);
 
         const data = new FormData();
@@ -39,9 +35,7 @@ const RequestPromise = () => {
         data.append('telefono', formData.telefono);
         data.append('tipo', formData.tipo);
         data.append('fecha', formData.fecha);
-        if (formData.comprobante) {
-            data.append('comprobante', formData.comprobante);
-        }
+        if (formData.comprobante) data.append('comprobante', formData.comprobante);
 
         try {
             const response = await fetch('/send_promise.php', {
@@ -49,156 +43,129 @@ const RequestPromise = () => {
                 body: data
             });
 
-            if (response.ok) {
-                toast.success('Solicitud enviada correctamente');
-                setFormData({
-                    telefono: user?.telefono || '',
-                    tipo: 'Promesa de Pago',
-                    fecha: '',
-                    comprobante: null
-                });
-            } else {
-                throw new Error('Error al enviar');
-            }
+            if (!response.ok) throw new Error('Error al enviar');
+
+            toast.success('Solicitud de promesa enviada correctamente');
+            setFormData({
+                telefono: user?.telefono || '',
+                tipo: 'Promesa de Pago',
+                fecha: '',
+                comprobante: null
+            });
         } catch (error) {
-            toast.error('Hubo un problema al enviar tu solicitud');
+            console.error('Promise request error:', error);
+            toast.error('No pudimos enviar tu solicitud. Intenta nuevamente.');
         } finally {
             setIsLoading(false);
         }
     };
 
     return (
-        <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-10">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                    <h1 className="text-3xl font-bold font-display text-white neon-text mb-2 tracking-tighter uppercase">
-                        Solicitar Promesa
-                    </h1>
-                    <p className="text-slate-400 text-xs tracking-widest font-mono opacity-60 uppercase">
-                        :: Compromiso de pago o abono administrativo ::
-                    </p>
-                </div>
-                <div className="p-3 glass-panel border-cyan-500/30 bg-cyan-500/5 rounded-2xl shadow-[0_0_20px_rgba(6,182,212,0.1)]">
-                    <Handshake className="text-cyan-400 w-8 h-8" strokeWidth={1.5} />
-                </div>
-            </div>
+        <div className="mx-auto max-w-3xl space-y-6 pb-4">
+            <PageHeading
+                eyebrow="Gestiones"
+                title="Promesa de pago"
+                description="Indica la fecha en la que te comprometes a realizar el pago. Puedes adjuntar un comprobante si lo necesitas."
+            />
 
-            <motion.div
-                initial={{ y: 20, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                className="glass-panel p-8 rounded-3xl border-white/5 relative overflow-hidden group shadow-2xl"
-            >
-                <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-cyan-500/20 rounded-tl-3xl group-hover:border-cyan-500/40 transition-colors" />
-                <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-cyan-500/20 rounded-br-3xl group-hover:border-cyan-500/40 transition-colors" />
+            <Surface className="p-5 sm:p-7">
+                <div className="mb-6 flex items-start gap-4 rounded-xl border border-white/8 bg-black/10 p-4">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-400/10 text-violet-300">
+                        <Handshake size={19} />
+                    </span>
+                    <div>
+                        <p className="font-semibold text-white">Solicitud asociada a tu cuenta</p>
+                        <p className="mt-1 text-sm leading-6 text-slate-400">
+                            Enviaremos tu nombre y teléfono junto con la fecha seleccionada para que el equipo pueda gestionar la promesa.
+                        </p>
+                    </div>
+                </div>
 
-                <form onSubmit={handleSubmit} className="space-y-6 relative z-10">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-bold text-cyan-500/50 uppercase tracking-[0.2em] ml-1">
-                                Usuario Solicitante
-                            </label>
-                            <div className="bg-cyan-950/20 border border-white/5 rounded-2xl px-5 py-4 flex items-center gap-3 text-slate-300">
-                                <User size={18} className="text-cyan-400/50" />
-                                <span className="font-medium text-sm">{user?.name || user?.nombre || 'Cargando...'}</span>
+                <form onSubmit={handleSubmit} className="space-y-5">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label className="mb-2 block text-sm font-semibold text-slate-300">Cliente</label>
+                            <div className="flex min-h-12 items-center gap-3 rounded-xl border border-white/8 bg-white/[0.025] px-4 text-sm text-slate-300">
+                                <UserRound size={17} className="text-slate-500" />
+                                <span className="truncate">{user?.name || user?.nombre || 'Cliente'}</span>
                             </div>
                         </div>
 
-                        <Input
-                            label="Teléfono de Contacto"
-                            icon={Phone}
-                            placeholder="Ej: 04121234567"
-                            value={formData.telefono}
-                            onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
-                            required
-                        />
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="space-y-2 text-left text-white">
-                            <label className="block text-[10px] font-bold text-cyan-500/50 ml-1 uppercase tracking-[0.2em]">
-                                Tipo de Solicitud
-                            </label>
+                        <div>
+                            <label htmlFor="promise-phone" className="mb-2 block text-sm font-semibold text-slate-300">Teléfono de contacto</label>
                             <div className="relative">
-                                <select
-                                    className="glass-input w-full rounded-2xl px-5 py-4 text-xs font-bold pr-10 appearance-none bg-[#0a1120] outline-none focus:border-cyan-500/50 transition-all cursor-pointer border border-white/10"
-                                    value={formData.tipo}
-                                    onChange={(e) => setFormData({ ...formData, tipo: e.target.value })}
+                                <Phone className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                                <input
+                                    id="promise-phone"
+                                    type="tel"
+                                    inputMode="tel"
+                                    autoComplete="tel"
+                                    value={formData.telefono}
+                                    onChange={(event) => setFormData({ ...formData, telefono: event.target.value })}
+                                    placeholder="Ej. 04121234567"
+                                    className="glass-input w-full rounded-xl py-3 pl-11 pr-4 text-sm"
                                     required
-                                >
-                                    <option value="Promesa de Pago">SÓLO PROMESA DE PAGO</option>
-                                </select>
-                                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-500/50">
-                                    <CheckCircle2 size={16} />
-                                </div>
-                            </div>
-                        </div>
-
-                        <Input
-                            type="date"
-                            label="Fecha de la Promesa"
-                            icon={Calendar}
-                            value={formData.fecha}
-                            min={new Date().toISOString().split('T')[0]}
-                            onChange={(e) => setFormData({ ...formData, fecha: e.target.value })}
-                            onClick={(e) => e.target.showPicker && e.target.showPicker()}
-                            required
-                        />
-                    </div>
-
-
-
-                    <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-cyan-500/50 uppercase tracking-[0.2em] ml-1">
-                            Comprobante de Pago (Opcional)
-                        </label>
-                        <div className="relative group cursor-pointer">
-                            <input
-                                type="file"
-                                id="receipt"
-                                onChange={handleFileChange}
-                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                                accept="image/*,.pdf"
-                            />
-                            <div className={cn(
-                                "flex flex-col items-center justify-center gap-2 p-8 rounded-2xl border-2 border-dashed transition-all duration-300",
-                                formData.comprobante
-                                    ? "bg-emerald-500/5 border-emerald-500/30 text-emerald-400"
-                                    : "bg-white/5 border-white/10 text-slate-500 group-hover:border-cyan-500/30 group-hover:bg-cyan-500/5"
-                            )}>
-                                <Upload size={24} className={formData.comprobante ? "text-emerald-400" : "text-cyan-400"} />
-                                <span className="text-xs font-bold uppercase tracking-widest text-white/80">
-                                    {formData.comprobante ? formData.comprobante.name : "Subir archivo o foto del recibo"}
-                                </span>
-                                <span className="text-[9px] opacity-40 uppercase tracking-tighter">PDF o Imagen (Máx 5MB)</span>
+                                />
                             </div>
                         </div>
                     </div>
 
-                    <div className="pt-4">
-                        <Button
-                            type="submit"
-                            className="w-full py-6 font-display text-xs font-bold tracking-[0.3em] bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-500 hover:to-blue-600 shadow-[0_20px_50px_rgba(0,100,200,0.3)] rounded-2xl group flex items-center justify-center gap-3 transition-all duration-300 relative overflow-hidden"
-                            isLoading={isLoading}
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label className="mb-2 block text-sm font-semibold text-slate-300">Tipo de solicitud</label>
+                            <div className="flex min-h-12 items-center rounded-xl border border-white/8 bg-white/[0.025] px-4 text-sm font-medium text-slate-300">
+                                Promesa de pago
+                            </div>
+                        </div>
+
+                        <div>
+                            <label htmlFor="promise-date" className="mb-2 block text-sm font-semibold text-slate-300">Fecha de la promesa</label>
+                            <div className="relative">
+                                <CalendarDays className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                                <input
+                                    id="promise-date"
+                                    type="date"
+                                    value={formData.fecha}
+                                    min={new Date().toISOString().split('T')[0]}
+                                    onChange={(event) => setFormData({ ...formData, fecha: event.target.value })}
+                                    className="glass-input w-full rounded-xl py-3 pl-11 pr-4 text-sm"
+                                    required
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="mb-2 block text-sm font-semibold text-slate-300">Comprobante opcional</label>
+                        <input id="promise-file" type="file" accept="image/*,.pdf" className="hidden" onChange={handleFileChange} />
+                        <label
+                            htmlFor="promise-file"
+                            className="flex min-h-16 cursor-pointer items-center gap-3 rounded-xl border border-dashed border-white/12 bg-white/[0.025] px-4 text-sm text-slate-400 transition hover:border-cyan-400/20 hover:text-slate-200"
                         >
-                            <span className="relative z-10 flex items-center gap-3">
-                                ENVIAR SOLICITUD A ADMIN <Send size={18} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+                            <Paperclip size={18} className="shrink-0 text-cyan-300" />
+                            <span className="min-w-0">
+                                <span className="block truncate font-medium text-slate-300">{formData.comprobante?.name || 'Adjuntar imagen o PDF'}</span>
+                                <span className="mt-0.5 block text-xs text-slate-600">Máximo 5 MB</span>
                             </span>
-                        </Button>
+                        </label>
                     </div>
-                </form>
-            </motion.div>
 
-            <div className="glass-panel p-6 rounded-2xl border-amber-500/20 bg-amber-500/5 flex items-start gap-4 shadow-lg shadow-amber-900/10">
-                <div className="p-2 bg-amber-500/20 rounded-lg">
-                    <ShieldCheck className="text-amber-400 w-5 h-5" />
-                </div>
+                    <button type="submit" disabled={isLoading} className="primary-action w-full py-3.5 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-52">
+                        {isLoading ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" /> : <Send size={17} />}
+                        {isLoading ? 'Enviando…' : 'Enviar solicitud'}
+                    </button>
+                </form>
+            </Surface>
+
+            <Surface className="flex items-start gap-3 border-amber-400/15 bg-amber-400/[0.04] p-4">
+                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
                 <div>
-                    <h4 className="text-amber-400 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Nota importante</h4>
-                    <p className="text-slate-400 text-xs leading-relaxed font-medium">
-                        El envío de esta solicitud no garantiza la reactivación inmediata. El administrador revisará y validará tu caso manualmente.
+                    <p className="font-semibold text-amber-100">Importante</p>
+                    <p className="mt-1 text-sm leading-6 text-slate-400">
+                        La promesa de pago es una solicitud administrativa distinta al reporte de pago Banesco. Su recepción no equivale a un pago confirmado.
                     </p>
                 </div>
-            </div>
+            </Surface>
         </div>
     );
 };

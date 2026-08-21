@@ -1,96 +1,99 @@
+import { createElement } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { LogOut, Wifi, User, LayoutDashboard, CreditCard, LifeBuoy, Users, Activity, Settings, FileText, Handshake, CheckSquare } from 'lucide-react';
+import {
+    LogOut, Wifi, User, LayoutDashboard, CreditCard,
+    LifeBuoy, Users, Activity, Settings, FileText, Handshake
+} from 'lucide-react';
 import useAuthStore from '../../auth/authStore';
 import { cn } from '../../utils';
 
-const NavItem = ({ icon: Icon, label, to, active }) => {
-    return (
-        <Link to={to} className="relative block group px-3 py-1">
-            {active && (
-                <motion.div
-                    layoutId="activeNav"
-                    className="absolute inset-0 bg-primary-500/10 rounded-xl"
-                    initial={false}
-                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                />
-            )}
-            <div className={cn(
-                "flex items-center gap-4 px-4 py-3 transition-all duration-300 rounded-xl",
-                active ? "text-white font-bold" : "text-slate-400 group-hover:text-white group-hover:bg-white/5"
-            )}>
-                <Icon size={20} className={cn(active ? "text-primary-400 drop-shadow-[0_0_8px_rgba(50,250,255,0.5)]" : "text-slate-500 group-hover:text-primary-400 transition-colors")} />
-                <span className="tracking-wide text-sm">{label}</span>
-            </div>
-        </Link>
-    );
-};
+const NavItem = ({ icon, label, to, active }) => (
+    <Link to={to} className="relative block px-3 py-1 group">
+        {active ? (
+            <div className="absolute inset-1 rounded-xl border border-cyan-400/15 bg-cyan-400/[0.07]" />
+        ) : null}
+        <div className={cn(
+            'relative flex min-h-11 items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm transition-colors',
+            active
+                ? 'font-semibold text-white'
+                : 'text-slate-400 group-hover:bg-white/[0.04] group-hover:text-white'
+        )}>
+            {createElement(icon, {
+                size: 19,
+                className: cn(active ? 'text-cyan-300' : 'text-slate-500 group-hover:text-cyan-300')
+            })}
+            <span>{label}</span>
+        </div>
+    </Link>
+);
 
 const Sidebar = ({ role }) => {
     const location = useLocation();
     const { logout, user } = useAuthStore();
 
     const clientLinks = [
-        { icon: LayoutDashboard, label: 'Resumen', to: '/client' },
-        { icon: CreditCard, label: 'Reportar Pagos', to: '/client/payments' },
-        { icon: Handshake, label: 'Solicitar Promesa', to: '/client/request-promise' },
+        { icon: LayoutDashboard, label: 'Inicio', to: '/client' },
         { icon: FileText, label: 'Facturas', to: '/client/invoices' },
+        { icon: CreditCard, label: 'Reportar pago', to: '/client/payments' },
+        { icon: Handshake, label: 'Promesa de pago', to: '/client/request-promise' },
         { icon: LifeBuoy, label: 'Soporte', to: '/client/support' },
         { icon: Settings, label: 'Configuración', to: '/client/settings' },
     ];
 
     const staffLinks = [
-        { icon: LayoutDashboard, label: 'Dashboard', to: '/staff' },
+        { icon: LayoutDashboard, label: 'Resumen', to: '/staff' },
         { icon: Users, label: 'Clientes', to: '/staff/clients' },
-        { icon: Activity, label: 'Red', to: '/staff/network' },
+        { icon: Activity, label: 'Estado de red', to: '/staff/network' },
         { icon: Settings, label: 'Herramientas', to: '/staff/tools' },
     ];
 
     const links = role === 'staff' ? staffLinks : clientLinks;
+    const isActive = (to) => to === '/client'
+        ? location.pathname === to
+        : location.pathname === to || location.pathname.startsWith(`${to}/`);
 
     return (
-        <aside className="fixed left-0 top-0 h-full w-64 glass-panel border-r border-white/10 z-40 hidden md:flex flex-col bg-[#020617]/80 backdrop-blur-md">
-            <div className="p-6 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-primary-600 to-secondary-600 flex items-center justify-center shadow-lg shadow-primary-500/20">
-                    <Wifi className="text-white w-6 h-6" />
+        <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col border-r border-white/8 bg-[#06101d]/90 backdrop-blur-xl md:flex">
+            <div className="flex items-center gap-3 px-5 py-6">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-300/20 bg-cyan-400/10 text-cyan-300">
+                    <Wifi className="h-5 w-5" />
                 </div>
-                <div>
-                    <h1 className="font-bold text-white text-lg leading-tight tracking-wide">Wifi Rapidito</h1>
-                    <span className="text-[10px] text-primary-400 font-bold tracking-[0.2em] uppercase">Panel de Control</span>
+                <div className="min-w-0">
+                    <h1 className="truncate text-base font-bold text-white">Wifi Rapidito</h1>
+                    <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        {role === 'staff' ? 'Operaciones' : 'Autogestión'}
+                    </p>
                 </div>
             </div>
 
-            <div className="flex-1 py-6 space-y-1 overflow-y-auto">
+            <div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-600">
+                Navegación
+            </div>
+            <div className="flex-1 space-y-0.5 overflow-y-auto pb-4">
                 {links.map((link) => (
-                    <NavItem
-                        key={link.to}
-                        {...link}
-                        active={location.pathname === link.to}
-                    />
+                    <NavItem key={link.to} {...link} active={isActive(link.to)} />
                 ))}
             </div>
 
-            <div className="p-6 border-t border-white/10">
-                <div className="flex items-center gap-3 mb-6 p-3 rounded-xl bg-white/5 border border-white/10 backdrop-blur-sm">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white shadow-lg">
-                        <User size={20} />
+            <div className="border-t border-white/8 p-4">
+                <div className="mb-3 flex items-center gap-3 rounded-xl border border-white/8 bg-white/[0.035] p-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.06] text-slate-300">
+                        <User size={18} />
                     </div>
-                    <div className="flex-1 min-w-0">
-                        <p className="text-sm font-bold text-white truncate">{user?.nombre || user?.name || 'Usuario'}</p>
-                        <p className="text-xs text-slate-400 truncate capitalize font-medium">{role === 'client' ? 'Cliente' : 'Administrador'}</p>
+                    <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-white">{user?.nombre || user?.name || 'Usuario'}</p>
+                        <p className="truncate text-xs text-slate-500">{role === 'client' ? 'Cliente' : 'Personal autorizado'}</p>
                     </div>
                 </div>
 
                 <button
+                    type="button"
                     onClick={logout}
-                    className="flex items-center gap-3 w-full px-4 py-3 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl transition-all duration-200 text-sm font-bold group border border-transparent hover:border-red-500/20"
+                    className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-semibold text-slate-400 transition hover:bg-red-500/10 hover:text-red-300"
                 >
-                    <LogOut size={18} className="group-hover:-translate-x-1 transition-transform" />
-                    <span>Cerrar Sesión</span>
+                    <LogOut size={18} />
+                    Cerrar sesión
                 </button>
-                <div className="mt-4 text-center">
-                    <span className="text-[10px] text-cyan-400 font-bold font-mono bg-cyan-400/10 px-2 py-0.5 rounded">BUILD VERSION: 3.16-MASTER</span>
-                </div>
             </div>
         </aside>
     );
