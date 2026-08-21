@@ -9,14 +9,23 @@ const LoginPage = () => {
     const { login, isLoading, error } = useAuthStore();
     const [formData, setFormData] = useState({ username: '', password: '' });
     const [showPassword, setShowPassword] = useState(false);
+    const [validationError, setValidationError] = useState('');
 
     const handleSubmit = async (event) => {
         event.preventDefault();
+        setValidationError('');
 
-        let finalUsername = formData.username.trim();
-        const isNumeric = /^\d+$/.test(finalUsername);
+        let finalUsername = formData.username
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, '');
 
-        if (finalUsername !== 'admin' && !finalUsername.includes('@') && !isNumeric) {
+        if (/^\d+$/.test(finalUsername)) {
+            setValidationError('El acceso de clientes es únicamente con tu usuario. Ejemplo: juanperez.');
+            return;
+        }
+
+        if (finalUsername !== 'admin' && !finalUsername.includes('@')) {
             finalUsername = `${finalUsername}@wifi-rapidito`;
         }
 
@@ -27,6 +36,8 @@ const LoginPage = () => {
             // The store exposes the user-facing error.
         }
     };
+
+    const displayedError = validationError || error;
 
     return (
         <div className="relative min-h-screen overflow-hidden bg-[#050b14] px-4 py-8 text-slate-100 sm:px-6">
@@ -49,7 +60,7 @@ const LoginPage = () => {
                                 Tu servicio, facturas, pagos y soporte en un solo lugar.
                             </h1>
                             <p className="mt-5 max-w-md text-sm leading-7 text-slate-400">
-                                Ingresa con tu usuario de Wifi Rapidito o con tu cédula para consultar y gestionar tu cuenta.
+                                Ingresa con tu usuario de Wifi Rapidito para consultar y gestionar tu cuenta.
                             </p>
                         </div>
 
@@ -84,12 +95,14 @@ const LoginPage = () => {
                             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
                                 <p className="app-eyebrow">Bienvenido</p>
                                 <h2 className="text-3xl font-bold tracking-tight text-white">Ingresa a tu cuenta</h2>
-                                <p className="mt-2 text-sm leading-6 text-slate-400">Usa tu usuario o cédula y tu clave de acceso.</p>
+                                <p className="mt-2 text-sm leading-6 text-slate-400">
+                                    Usa tu usuario y tu clave de acceso. Tu usuario es tu nombre y apellido pegados en minúsculas.
+                                </p>
                             </motion.div>
 
                             <form onSubmit={handleSubmit} className="mt-8 space-y-5">
                                 <div>
-                                    <label htmlFor="username" className="mb-2 block text-sm font-semibold text-slate-300">Usuario o cédula</label>
+                                    <label htmlFor="username" className="mb-2 block text-sm font-semibold text-slate-300">Usuario</label>
                                     <div className="relative">
                                         <User className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                                         <input
@@ -97,14 +110,24 @@ const LoginPage = () => {
                                             type="text"
                                             inputMode="text"
                                             autoComplete="username"
-                                            placeholder="Ej. juanperez o 12345678"
+                                            autoCapitalize="none"
+                                            autoCorrect="off"
+                                            spellCheck={false}
+                                            placeholder="Ej. juanperez"
                                             value={formData.username}
-                                            onChange={(event) => setFormData({ ...formData, username: event.target.value })}
+                                            onChange={(event) => {
+                                                const normalizedUsername = event.target.value
+                                                    .toLowerCase()
+                                                    .replace(/\s+/g, '');
+                                                setValidationError('');
+                                                setFormData({ ...formData, username: normalizedUsername });
+                                            }}
                                             className="glass-input w-full rounded-xl py-3.5 pl-11 pr-4 text-sm"
                                             required
                                             autoFocus
                                         />
                                     </div>
+                                    <p className="mt-2 text-xs text-slate-500">Ejemplo: Juan Perez → <span className="font-mono text-cyan-300/80">juanperez</span></p>
                                 </div>
 
                                 <div>
@@ -133,7 +156,7 @@ const LoginPage = () => {
                                 </div>
 
                                 <AnimatePresence initial={false}>
-                                    {error ? (
+                                    {displayedError ? (
                                         <motion.div
                                             initial={{ opacity: 0, y: -5 }}
                                             animate={{ opacity: 1, y: 0 }}
@@ -141,7 +164,7 @@ const LoginPage = () => {
                                             className="flex items-start gap-3 rounded-xl border border-red-400/20 bg-red-400/[0.07] p-4"
                                         >
                                             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-300" />
-                                            <p className="text-sm leading-5 text-red-100/80">{error}</p>
+                                            <p className="text-sm leading-5 text-red-100/80">{displayedError}</p>
                                         </motion.div>
                                     ) : null}
                                 </AnimatePresence>
