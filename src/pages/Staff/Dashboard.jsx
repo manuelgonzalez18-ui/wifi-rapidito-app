@@ -1,111 +1,183 @@
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Search, MoreVertical, Wifi, WifiOff } from 'lucide-react';
-import Card from '../../components/ui/Card';
-import Input from '../../components/ui/Input';
+import { useEffect, useMemo, useState } from 'react';
+import { Search, Users, Wifi, WifiOff, RefreshCw, UserRound } from 'lucide-react';
 import api from '../../api/client';
+import {
+    EmptyState,
+    LoadingBlock,
+    PageHeading,
+    StatusPill,
+    Surface,
+} from '../../components/ui/ClientUi';
+
+const getClientName = (client) => client?.nombre || client?.name || client?.cliente || client?.usuario || 'Cliente';
+const getClientStatus = (client) => String(client?.estado || client?.status || '').toLowerCase().trim();
+const getServiceId = (client) => client?.id_servicio || client?.servicio?.id_servicio || client?.id || '—';
+const getPlan = (client) => client?.plan_internet || client?.plan || client?.servicio?.plan || client?.nombre_plan || '—';
+
+const statusMeta = (client) => {
+    const status = getClientStatus(client);
+    const active = ['activo', 'active', 'online', 'habilitado'].includes(status);
+    const suspended = status.includes('suspend') || status.includes('cort') || status.includes('inactiv');
+    if (active) return { label: client?.estado || client?.status || 'Activo', tone: 'success' };
+    if (suspended) return { label: client?.estado || client?.status || 'Suspendido', tone: 'danger' };
+    return { label: client?.estado || client?.status || 'Sin estado', tone: 'neutral' };
+};
 
 const StaffDashboard = () => {
     const [clients, setClients] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+    const [query, setQuery] = useState('');
+    const [reloadKey, setReloadKey] = useState(0);
 
     useEffect(() => {
+        let active = true;
+
         const fetchClients = async () => {
+            setLoading(true);
+            setError('');
             try {
-                const res = await api.get('/clientes/');
-                const data = res.data;
-                const clientList = Array.isArray(data) ? data : (data.results || []);
-                setClients(clientList);
-            } catch (err) {
-                console.error(err);
+                const response = await api.get('/clientes/');
+                const data = response?.data;
+                const list = Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : []);
+                if (active) setClients(list);
+            } catch (requestError) {
+                console.error('Staff client load error:', requestError);
+                if (active) setError('No pudimos cargar los clientes en este momento.');
             } finally {
-                setLoading(false);
+                if (active) setLoading(false);
             }
         };
+
         fetchClients();
-    }, []);
+        return () => { active = false; };
+    }, [reloadKey]);
+
+    const metrics = useMemo(() => {
+        let active = 0;
+        let suspended = 0;
+        let unknown = 0;
+
+        clients.forEach((client) => {
+            const status = getClientStatus(client);
+            if (['activo', 'active', 'online', 'habilitado'].includes(status)) active += 1;
+            else if (status.includes('suspend') || status.includes('cort') || status.includes('inactiv')) suspended += 1;
+            else unknown += 1;
+        });
+
+        return { total: clients.length, active, suspended, unknown };
+    }, [clients]);
+
+    const filteredClients = useMemo(() => {
+        const needle = query.trim().toLowerCase();
+        if (!needle) return clients.slice(0, 30);
+
+        return clients.filter((client) => [
+            getClientName(client),
+            client?.cedula,
+            client?.telefono,
+            client?.usuario,
+            getServiceId(client),
+            client?.direccion,
+        ].filter(Boolean).some((value) => String(value).toLowerCase().includes(needle))).slice(0, 50);
+    }, [clients, query]);
 
     return (
-        <div className="space-y-8">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <motion.div
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                >
-                    <h1 className="text-3xl font-bold text-slate-800">Panel de Administración</h1>
-                    <p className="text-slate-500 mt-1">Gestión de red y usuarios</p>
-                </motion.div>
+        <div className="space-y-6 pb-4">
+            <PageHeading
+                eyebrow="Operaciones"
+                title="Resumen de clientes"
+                description="Información operativa basada en los datos disponibles actualmente en WispHub."
+            />
 
-                <div className="w-full md:w-96">
-                    <Input icon={Search} placeholder="Buscar cliente por nombre o IP..." />
-                </div>
-            </div>
-
-            {/* Stats Row */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {['Clientes Activos', 'Suspendidos', 'Instalaciones Hoy', 'Tickets Abiertos'].map((label, i) => (
-                    <Card key={label} className="p-4 flex items-center gap-4 hover:bg-slate-50/50 cursor-pointer">
-                        <div className={`w-12 h-12 rounded-full flex items-center justify-center ${i === 1 ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
-                            <Wifi size={20} />
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                    { label: 'Clientes cargados', value: metrics.total, icon: Users, tone: 'text-cyan-300 bg-cyan-400/10' },
+                    { label: 'Activos', value: metrics.active, icon: Wifi, tone: 'text-emerald-300 bg-emerald-400/10' },
+                    { label: 'Suspendidos', value: metrics.suspended, icon: WifiOff, tone: 'text-red-300 bg-red-400/10' },
+                    { label: 'Sin clasificar', value: metrics.unknown, icon: UserRound, tone: 'text-slate-300 bg-white/[0.05]' },
+                ].map(({ label, value, icon: Icon, tone }) => (
+                    <Surface key={label} className="p-4">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
+                                <p className="mt-2 text-2xl font-bold text-white">{value}</p>
+                            </div>
+                            <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${tone}`}>
+                                <Icon size={18} />
+                            </span>
                         </div>
-                        <div>
-                            <p className="text-2xl font-bold text-slate-800">{10 + i * 5}</p>
-                            <p className="text-xs text-slate-500 uppercase font-semibold">{label}</p>
-                        </div>
-                    </Card>
+                    </Surface>
                 ))}
             </div>
 
-            <Card className="overflow-hidden p-0">
-                <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white/50">
-                    <h3 className="font-bold text-lg text-slate-800">Clientes Recientes</h3>
-                    <button className="text-sm text-primary-600 hover:text-primary-700 font-medium">Ver todos</button>
+            <Surface className="p-4">
+                <div className="relative max-w-xl">
+                    <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                    <input
+                        type="search"
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder="Buscar por nombre, cédula, teléfono, usuario o servicio"
+                        className="glass-input w-full rounded-xl py-2.5 pl-10 pr-4 text-sm"
+                    />
                 </div>
+            </Surface>
 
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                        <thead className="bg-slate-50/50 text-slate-500 text-xs uppercase font-semibold">
-                            <tr>
-                                <th className="px-6 py-4">Cliente</th>
-                                <th className="px-6 py-4">IP Address</th>
-                                <th className="px-6 py-4">Plan</th>
-                                <th className="px-6 py-4">Estado</th>
-                                <th className="px-6 py-4">Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                            {loading ? (
-                                <tr><td colSpan="5" className="p-8 text-center text-slate-500">Cargando clientes...</td></tr>
-                            ) : clients.map((client) => (
-                                <tr key={client.id} className="hover:bg-slate-50/50 transition-colors">
-                                    <td className="px-6 py-4 font-medium text-slate-700">{client.name}</td>
-                                    <td className="px-6 py-4 text-slate-500 font-mono text-sm">{client.ip}</td>
-                                    <td className="px-6 py-4 text-slate-600">{client.plan}</td>
-                                    <td className="px-6 py-4">
-                                        <span className={cn(
-                                            "px-2.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5",
-                                            client.status === 'active' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                                        )}>
-                                            {client.status === 'active' ? <Wifi size={12} /> : <WifiOff size={12} />}
-                                            {client.status === 'active' ? 'Activo' : 'Suspendido'}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <button className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600">
-                                            <MoreVertical size={18} />
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </Card>
+            {loading ? <LoadingBlock label="Cargando clientes…" /> : null}
+
+            {!loading && error ? (
+                <EmptyState
+                    icon={RefreshCw}
+                    title="No pudimos cargar los clientes"
+                    description={error}
+                    action={(
+                        <button type="button" onClick={() => setReloadKey((value) => value + 1)} className="secondary-action">
+                            <RefreshCw size={16} /> Reintentar
+                        </button>
+                    )}
+                />
+            ) : null}
+
+            {!loading && !error ? (
+                <Surface className="overflow-hidden">
+                    <div className="border-b border-white/8 p-4 sm:p-5">
+                        <h2 className="font-semibold text-white">Clientes</h2>
+                        <p className="mt-1 text-xs text-slate-500">
+                            {query ? `${filteredClients.length} coincidencia${filteredClients.length === 1 ? '' : 's'} mostradas` : `Mostrando hasta 30 de ${clients.length}`}
+                        </p>
+                    </div>
+
+                    {filteredClients.length === 0 ? (
+                        <div className="p-8 text-center text-sm text-slate-500">No encontramos clientes con esa búsqueda.</div>
+                    ) : (
+                        <div className="divide-y divide-white/6">
+                            {filteredClients.map((client, index) => {
+                                const meta = statusMeta(client);
+                                return (
+                                    <div key={`${getServiceId(client)}-${index}`} className="grid gap-3 p-4 transition hover:bg-white/[0.025] sm:grid-cols-[1.4fr_.8fr_.8fr_auto] sm:items-center sm:px-5">
+                                        <div className="min-w-0">
+                                            <p className="truncate font-semibold text-white">{getClientName(client)}</p>
+                                            <p className="mt-1 truncate text-xs text-slate-500">{client?.usuario || client?.cedula || client?.telefono || 'Sin identificador visible'}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600 sm:hidden">Servicio</p>
+                                            <p className="mt-1 text-sm font-medium text-slate-300 sm:mt-0">#{getServiceId(client)}</p>
+                                        </div>
+                                        <div className="min-w-0">
+                                            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600 sm:hidden">Plan</p>
+                                            <p className="mt-1 truncate text-sm text-slate-400 sm:mt-0">{getPlan(client)}</p>
+                                        </div>
+                                        <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </Surface>
+            ) : null}
         </div>
     );
 };
-
-// Utils import fix if needed (assuming cn is in ../../utils which it is)
-import { cn } from '../../utils';
 
 export default StaffDashboard;
