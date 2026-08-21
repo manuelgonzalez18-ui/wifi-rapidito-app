@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { createElement } from 'react';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
 export const PageHeading = ({ eyebrow, title, description, action }) => (
@@ -27,10 +27,10 @@ export const LoadingBlock = ({ label = 'Cargando información…', compact = fal
   </div>
 );
 
-export const EmptyState = ({ icon: Icon = AlertCircle, title, description, action }) => (
+export const EmptyState = ({ icon = AlertCircle, title, description, action }) => (
   <div className="app-surface p-8 text-center sm:p-10">
     <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-400">
-      <Icon className="h-6 w-6" />
+      {createElement(icon, { className: 'h-6 w-6' })}
     </div>
     <h3 className="text-lg font-semibold text-white">{title}</h3>
     {description ? <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-400">{description}</p> : null}
@@ -38,52 +38,18 @@ export const EmptyState = ({ icon: Icon = AlertCircle, title, description, actio
   </div>
 );
 
-export const QuickAction = ({ icon: Icon, label, description, onClick, tone = 'cyan' }) => (
-  <motion.button
+export const QuickAction = ({ icon, label, description, onClick, tone = 'cyan' }) => (
+  <button
     type="button"
-    whileTap={{ scale: 0.98 }}
     onClick={onClick}
-    className="app-surface group flex min-h-28 w-full items-start gap-4 p-5 text-left transition hover:-translate-y-0.5 hover:border-cyan-400/30 hover:bg-white/[0.06]"
+    className="app-surface group flex min-h-28 w-full items-start gap-4 p-5 text-left transition hover:-translate-y-0.5 hover:border-cyan-400/30 hover:bg-white/[0.06] active:translate-y-0"
   >
     <span className={`quick-action-icon quick-action-${tone}`}>
-      <Icon className="h-5 w-5" />
+      {createElement(icon, { className: 'h-5 w-5' })}
     </span>
     <span className="min-w-0">
       <span className="block font-semibold text-white">{label}</span>
       <span className="mt-1 block text-sm leading-5 text-slate-400">{description}</span>
     </span>
-  </motion.button>
+  </button>
 );
-
-export const formatMoney = (value) => {
-  const amount = Number.parseFloat(value ?? 0);
-  return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : '$0.00';
-};
-
-export const formatDate = (value, fallback = '—') => {
-  if (!value) return fallback;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return fallback;
-  return parsed.toLocaleDateString('es-VE', { day: '2-digit', month: 'short', year: 'numeric' });
-};
-
-export const normalizeInvoiceStatus = (status) => {
-  const value = String(status ?? '').toLowerCase().trim();
-  if (value === '2' || value.includes('pendiente') || value.includes('por_pagar') || value.includes('unpaid')) return 'pending';
-  if (value.includes('pagad') || value.includes('paid')) return 'paid';
-  if (value.includes('vencid')) return 'overdue';
-  if (value.includes('cancel')) return 'cancelled';
-  return 'neutral';
-};
-
-export const invoiceStatusMeta = (status) => {
-  const normalized = normalizeInvoiceStatus(status);
-  const map = {
-    pending: { label: 'Pendiente', tone: 'warning' },
-    paid: { label: 'Pagada', tone: 'success' },
-    overdue: { label: 'Vencida', tone: 'danger' },
-    cancelled: { label: 'Cancelada', tone: 'neutral' },
-    neutral: { label: status || 'Sin estado', tone: 'neutral' },
-  };
-  return map[normalized];
-};
