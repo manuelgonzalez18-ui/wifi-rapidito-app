@@ -1,11 +1,8 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
-import { CheckSquare, Phone, Upload, Send, User, ShieldCheck, AlertCircle } from 'lucide-react';
+import { CheckCircle2, MessageSquareText, Paperclip, Phone, Send, UserRound, AlertCircle } from 'lucide-react';
 import useAuthStore from '../../auth/authStore';
-import Button from '../../components/ui/Button';
-import Input from '../../components/ui/Input';
 import toast from 'react-hot-toast';
-import { cn } from '../../utils';
+import { PageHeading, Surface } from '../../components/ui/ClientUi';
 
 const ConfirmPromisePayment = () => {
     const { user } = useAuthStore();
@@ -16,27 +13,28 @@ const ConfirmPromisePayment = () => {
         comprobante: null
     });
 
-    const handleFileChange = (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            if (file.size > 10 * 1024 * 1024) {
-                toast.error('El archivo no debe superar los 10MB');
-                return;
-            }
-            setFormData({ ...formData, comprobante: file });
+    const handleFileChange = (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        if (file.size > 10 * 1024 * 1024) {
+            toast.error('El archivo no debe superar los 10 MB');
+            return;
         }
+
+        setFormData((current) => ({ ...current, comprobante: file }));
     };
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
+    const handleSubmit = async (event) => {
+        event.preventDefault();
 
         if (!formData.telefono) {
-            toast.error('Por favor, ingresa tu número de teléfono');
+            toast.error('Ingresa tu número de teléfono');
             return;
         }
 
         if (!formData.comprobante) {
-            toast.error('Por favor, adjunta el comprobante de pago');
+            toast.error('Adjunta el comprobante de pago');
             return;
         }
 
@@ -55,134 +53,118 @@ const ConfirmPromisePayment = () => {
                 body: data
             });
 
-            if (response.ok) {
-                toast.success('Pago reportado con éxito. Validaremos a la brevedad.');
-                setFormData({
-                    telefono: user?.telefono || '',
-                    comentario: '',
-                    comprobante: null
-                });
-            } else {
-                const res = await response.json();
-                throw new Error(res.error || 'Error de envío');
+            if (!response.ok) {
+                const result = await response.json().catch(() => ({}));
+                throw new Error(result.error || 'Error de envío');
             }
+
+            toast.success('Comprobante enviado correctamente');
+            setFormData({
+                telefono: user?.telefono || '',
+                comentario: '',
+                comprobante: null
+            });
         } catch (error) {
-            toast.error(error.message || 'Error al enviar el reporte de pago');
+            console.error('Promise payment confirmation error:', error);
+            toast.error(error.message || 'No pudimos enviar el comprobante');
         } finally {
             setIsLoading(false);
         }
     };
 
     return (
-        <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-10">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                    <h1 className="text-3xl font-bold font-display text-white neon-text mb-2 tracking-tighter uppercase">
-                        Confirmar Pago
-                    </h1>
-                    <p className="text-slate-400 text-xs tracking-widest font-mono opacity-60 uppercase">
-                        :: Reportar cumplimiento de promesa de pago ::
-                    </p>
-                </div>
-                <div className="p-3 glass-panel border-green-500/30 bg-green-500/5 rounded-2xl shadow-[0_0_20px_rgba(34,197,94,0.1)]">
-                    <CheckSquare className="text-green-400 w-8 h-8" strokeWidth={1.5} />
-                </div>
-            </div>
+        <div className="mx-auto max-w-3xl space-y-6 pb-4">
+            <PageHeading
+                eyebrow="Promesa de pago"
+                title="Confirmar cumplimiento"
+                description="Si realizaste un pago asociado a una promesa, envía el comprobante y tus datos de contacto para su gestión."
+            />
 
-            <motion.div
-                initial={{ y: 20, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                className="glass-panel p-8 rounded-3xl border-white/5 relative overflow-hidden group shadow-2xl"
-            >
-                <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-green-500/20 rounded-tl-3xl group-hover:border-green-500/40 transition-colors" />
-                <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-green-500/20 rounded-br-3xl group-hover:border-green-500/40 transition-colors" />
+            <Surface className="p-5 sm:p-7">
+                <div className="mb-6 flex items-start gap-4 rounded-xl border border-emerald-400/15 bg-emerald-400/[0.04] p-4">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
+                        <CheckCircle2 size={19} />
+                    </span>
+                    <div>
+                        <p className="font-semibold text-white">Comprobante de una promesa</p>
+                        <p className="mt-1 text-sm leading-6 text-slate-400">
+                            Esta gestión es independiente del formulario de validación Banesco disponible en la sección Reportar pago.
+                        </p>
+                    </div>
+                </div>
 
-                <form onSubmit={handleSubmit} className="space-y-6 relative z-10">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-bold text-green-500/50 uppercase tracking-[0.2em] ml-1">
-                                Usuario
-                            </label>
-                            <div className="bg-green-950/20 border border-white/5 rounded-2xl px-5 py-4 flex items-center gap-3 text-slate-300">
-                                <User size={18} className="text-green-400/50" />
-                                <span className="font-medium text-sm">{user?.nombre || user?.name || 'Cargando...'}</span>
+                <form onSubmit={handleSubmit} className="space-y-5">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label className="mb-2 block text-sm font-semibold text-slate-300">Cliente</label>
+                            <div className="flex min-h-12 items-center gap-3 rounded-xl border border-white/8 bg-white/[0.025] px-4 text-sm text-slate-300">
+                                <UserRound size={17} className="text-slate-500" />
+                                <span className="truncate">{user?.nombre || user?.name || 'Cliente'}</span>
                             </div>
                         </div>
 
-                        <Input
-                            label="Teléfono"
-                            icon={Phone}
-                            placeholder="Tu número de contacto"
-                            value={formData.telefono}
-                            onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
-                            required
-                        />
+                        <div>
+                            <label htmlFor="confirmation-phone" className="mb-2 block text-sm font-semibold text-slate-300">Teléfono</label>
+                            <div className="relative">
+                                <Phone className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                                <input
+                                    id="confirmation-phone"
+                                    type="tel"
+                                    inputMode="tel"
+                                    autoComplete="tel"
+                                    value={formData.telefono}
+                                    onChange={(event) => setFormData({ ...formData, telefono: event.target.value })}
+                                    placeholder="Tu número de contacto"
+                                    className="glass-input w-full rounded-xl py-3 pl-11 pr-4 text-sm"
+                                    required
+                                />
+                            </div>
+                        </div>
                     </div>
 
-                    <div className="space-y-2">
-                        <label className="block text-[10px] font-bold text-green-500/50 ml-1 uppercase tracking-[0.2em]">
-                            ¿Algún comentario adicional? (Opcional)
-                        </label>
-                        <textarea
-                            className="w-full bg-[#0a1120] border border-white/10 rounded-2xl px-5 py-4 text-slate-300 focus:outline-none focus:border-green-500/50 transition-all resize-none h-28 text-sm placeholder:text-slate-600"
-                            placeholder="Escribe aquí si tienes algo que decir sobre tu pago..."
-                            value={formData.comentario}
-                            onChange={(e) => setFormData({ ...formData, comentario: e.target.value })}
-                        />
-                    </div>
-
-                    <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-green-500/50 uppercase tracking-[0.2em] ml-1">
-                            Comprobante Obligatorio
-                        </label>
-                        <div className="relative group cursor-pointer">
-                            <input
-                                type="file"
-                                onChange={handleFileChange}
-                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                                accept="image/*,.pdf"
-                                required
+                    <div>
+                        <label htmlFor="confirmation-comment" className="mb-2 block text-sm font-semibold text-slate-300">Comentario opcional</label>
+                        <div className="relative">
+                            <MessageSquareText className="absolute left-4 top-4 h-4 w-4 text-slate-500" />
+                            <textarea
+                                id="confirmation-comment"
+                                value={formData.comentario}
+                                onChange={(event) => setFormData({ ...formData, comentario: event.target.value })}
+                                placeholder="Agrega alguna información que ayude a identificar tu caso."
+                                rows={4}
+                                className="glass-input w-full resize-none rounded-xl py-3 pl-11 pr-4 text-sm leading-6"
                             />
-                            <div className={cn(
-                                "flex flex-col items-center justify-center gap-3 p-10 rounded-2xl border-2 border-dashed transition-all duration-300",
-                                formData.comprobante
-                                    ? "bg-green-500/10 border-green-500/50 text-green-400"
-                                    : "bg-white/5 border-white/10 text-slate-500 group-hover:border-green-500/30 group-hover:bg-green-500/5"
-                            )}>
-                                <Upload size={32} className={formData.comprobante ? "text-green-400" : "text-green-500/50"} />
-                                <span className="text-xs font-bold uppercase tracking-widest text-white/80 text-center">
-                                    {formData.comprobante ? formData.comprobante.name : "Subir Recibo de Pago"}
-                                </span>
-                                <span className="text-[9px] opacity-40 uppercase tracking-tighter">Imagen o PDF (Máx 10MB)</span>
-                            </div>
                         </div>
                     </div>
 
-                    <div className="pt-4">
-                        <Button
-                            type="submit"
-                            className="w-full py-6 font-display text-xs font-bold tracking-[0.3em] bg-gradient-to-r from-green-600 to-emerald-700 hover:from-green-500 hover:to-emerald-600 shadow-[0_20px_50px_rgba(34,197,94,0.2)] rounded-2xl group flex items-center justify-center gap-3 transition-all duration-300 relative overflow-hidden text-white"
-                            isLoading={isLoading}
+                    <div>
+                        <label className="mb-2 block text-sm font-semibold text-slate-300">Comprobante de pago</label>
+                        <input id="confirmation-file" type="file" accept="image/*,.pdf" className="hidden" onChange={handleFileChange} required />
+                        <label
+                            htmlFor="confirmation-file"
+                            className="flex min-h-16 cursor-pointer items-center gap-3 rounded-xl border border-dashed border-white/12 bg-white/[0.025] px-4 text-sm text-slate-400 transition hover:border-emerald-400/20 hover:text-slate-200"
                         >
-                            <span className="relative z-10 flex items-center gap-3">
-                                ENVIAR REPORTE DE PAGO <Send size={18} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+                            <Paperclip size={18} className="shrink-0 text-emerald-300" />
+                            <span className="min-w-0">
+                                <span className="block truncate font-medium text-slate-300">{formData.comprobante?.name || 'Adjuntar imagen o PDF'}</span>
+                                <span className="mt-0.5 block text-xs text-slate-600">Obligatorio · máximo 10 MB</span>
                             </span>
-                        </Button>
+                        </label>
                     </div>
-                </form>
-            </motion.div>
 
-            <div className="glass-panel p-6 rounded-2xl border-green-500/20 bg-green-500/5 flex items-start gap-4 shadow-lg shadow-green-900/10">
-                <div className="p-2 bg-green-500/20 rounded-lg">
-                    <ShieldCheck className="text-green-400 w-6 h-6 flex-shrink-0" />
-                </div>
-                <div>
-                    <h4 className="text-green-400 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Estatus de Seguridad</h4>
-                    <p className="text-slate-400 text-xs leading-relaxed font-medium">
-                        Una vez enviado, el administrador procesará tu pago y actualizará tu estatus en Wisphub. Tu conexión se reestablecerá automáticamente al validar el abono.
-                    </p>
-                </div>
-            </div>
+                    <button type="submit" disabled={isLoading} className="primary-action w-full py-3.5 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-52">
+                        {isLoading ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" /> : <Send size={17} />}
+                        {isLoading ? 'Enviando…' : 'Enviar comprobante'}
+                    </button>
+                </form>
+            </Surface>
+
+            <Surface className="flex items-start gap-3 p-4">
+                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-slate-500" />
+                <p className="text-sm leading-6 text-slate-400">
+                    Para un pago que deba validarse directamente con Banesco y registrarse automáticamente en WispHub, utiliza la opción “Reportar pago” del menú principal.
+                </p>
+            </Surface>
         </div>
     );
 };
