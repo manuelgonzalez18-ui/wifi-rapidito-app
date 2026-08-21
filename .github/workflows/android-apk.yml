@@ -1,0 +1,133 @@
+name: Android APK
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APK_VERSION: 6.0.1
+  APK_FILENAME: Wifi-Rapidito-6.0.1.apk
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Use Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web frontend
+        run: npm run build
+
+      - name: Sync Capacitor Android
+        run: npx cap sync android
+
+      - name: Build installable debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x android/gradlew
+          cd android
+          ./gradlew assembleDebug --no-daemon
+          cd ..
+          test -s android/app/build/outputs/apk/debug/app-debug.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk "$APK_FILENAME"
+          test -s "$APK_FILENAME"
+          echo "Built $APK_FILENAME ($(du -h "$APK_FILENAME" | cut -f1))"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wifi-rapidito-android-${{ github.sha }}
+          path: ${{ env.APK_FILENAME }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Configure Hostinger SSH
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy > /dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 -o BatchMode=yes -o ConnectTimeout=15 \
+            "$HOSTINGER_USER@$HOSTINGER_HOST" 'echo "Hostinger SSH connection verified for APK deploy."'
+
+      - name: Deploy APK to Hostinger
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
+          REMOTE_NEXT="$REMOTE_BASE/$APK_FILENAME.next"
+          REMOTE_VERSIONED="$REMOTE_BASE/$APK_FILENAME"
+          REMOTE_STABLE="$REMOTE_BASE/Wifi-Rapidito.apk"
+
+          scp -i ~/.ssh/hostinger_deploy -P 65002 \
+            "$APK_FILENAME" \
+            "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_NEXT"
+
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            "test -s '$REMOTE_NEXT' && mv '$REMOTE_NEXT' '$REMOTE_VERSIONED' && cp '$REMOTE_VERSIONED' '$REMOTE_STABLE' && test -s '$REMOTE_STABLE'"
+
+      - name: Verify public APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://wifirapidito.com/$APK_FILENAME?sha=$GITHUB_SHA"
+          for attempt in {1..12}; do
+            rm -f apk-head.bin
+            if curl -fsS --range 0-3 "$URL" -o apk-head.bin; then
+              SIGNATURE="$(head -c 4 apk-head.bin | xxd -p)"
+              if [[ "$SIGNATURE" == "504b0304" ]]; then
+                echo "Public APK verified: $APK_FILENAME"
+                exit 0
+              fi
+            fi
+            echo "Waiting for APK propagation ($attempt/12)..."
+            sleep 5
+          done
+          echo "APK could not be verified publicly."
+          exit 1
