@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APK_VERSION: 6.0.1
-  APK_FILENAME: Wifi-Rapidito-6.0.1.apk
+  APK_VERSION: 6.0.2
+  APK_FILENAME: Wifi-Rapidito-6.0.2.apk
 
 jobs:
   build-apk:
