@@ -1,6 +1,36 @@
 import { create } from 'zustand';
 import api from '../api/client';
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isTransientLoginError = (error) => {
+    const status = error?.response?.status;
+    return (
+        !error?.response ||
+        ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'].includes(error?.code) ||
+        [502, 503, 504].includes(status)
+    );
+};
+
+const loginErrorMessage = (error) => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        return 'Tu teléfono está sin conexión a Internet. Revisa Wi‑Fi o datos móviles e intenta nuevamente.';
+    }
+
+    const serverMessage = error?.response?.data?.error;
+    if (serverMessage) return serverMessage;
+
+    if (['ECONNABORTED', 'ETIMEDOUT'].includes(error?.code)) {
+        return 'La conexión tardó demasiado. Intenta nuevamente en unos segundos.';
+    }
+
+    if (!error?.response || error?.code === 'ERR_NETWORK') {
+        return 'No pudimos conectar con el servidor de Wifi Rapidito. Verifica tu conexión e intenta nuevamente.';
+    }
+
+    return error?.message || 'No pudimos iniciar sesión. Intenta nuevamente.';
+};
+
 const useAuthStore = create((set) => ({
     user: null,
     token: localStorage.getItem('token'),
@@ -20,45 +50,57 @@ const useAuthStore = create((set) => ({
                 return user;
             }
 
-            // CLIENT LOGIN: Use custom PHP endpoint with pagination
-            console.log(`[AUTH] Login attempt for: "${username}"`);
+            const payload = {
+                username: username.trim(),
+                password,
+            };
 
-            try {
-                const response = await api.post('/login_wisphub.php', {
-                    username: username.trim(),
-                    password: password
-                });
+            let response;
+            let lastError;
 
-                if (response.data.success && response.data.user) {
-                    const user = {
-                        role: 'client',
-                        ...response.data.user
-                    };
-
-                    const token = response.data.token;
-                    localStorage.setItem('token', token);
-                    localStorage.setItem('user_role', 'client');
-                    localStorage.setItem('user_data', JSON.stringify(user));
-
-                    set({ user, token, isAuthenticated: true, isLoading: false });
-                    console.log('[AUTH] ✅ Login successful via pagination endpoint');
-                    return user;
-                } else {
-                    throw new Error(response.data.error || 'Error de autenticación');
+            // A mobile connection can briefly change between Wi-Fi and cellular.
+            // Retry exactly once for transport/upstream errors, never for bad credentials.
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+                try {
+                    response = await api.post('/login_wisphub.php', payload, {
+                        timeout: 12000,
+                        headers: { 'Cache-Control': 'no-cache' },
+                    });
+                    lastError = null;
+                    break;
+                } catch (error) {
+                    lastError = error;
+                    if (attempt === 0 && isTransientLoginError(error)) {
+                        await wait(700);
+                        continue;
+                    }
+                    break;
                 }
-            } catch (authError) {
-                console.error('[AUTH] ❌ Login failed:', authError);
-                const errorMessage = authError.response?.data?.error ||
-                    authError.message ||
-                    'Usuario no encontrado en WispHub. Verifica que hayas escrito tu nombre y apellido pegados en minúsculas.';
-                throw new Error(errorMessage);
             }
 
+            if (lastError) throw lastError;
+
+            if (response?.data?.success && response.data.user) {
+                const user = {
+                    role: 'client',
+                    ...response.data.user,
+                };
+
+                const token = response.data.token;
+                localStorage.setItem('token', token);
+                localStorage.setItem('user_role', 'client');
+                localStorage.setItem('user_data', JSON.stringify(user));
+
+                set({ user, token, isAuthenticated: true, isLoading: false });
+                return user;
+            }
+
+            throw new Error(response?.data?.error || 'Error de autenticación');
         } catch (error) {
             console.error('[AUTH] Login error:', error);
-            const errorMessage = error.message || 'Error de autenticación';
+            const errorMessage = loginErrorMessage(error);
             set({ error: errorMessage, isLoading: false });
-            throw error;
+            throw new Error(errorMessage);
         }
     },
 
@@ -69,7 +111,6 @@ const useAuthStore = create((set) => ({
         set({ user: null, token: null, isAuthenticated: false, error: null });
     },
 
-    // Load user data from stored token on app startup
     loadUser: async () => {
         const token = localStorage.getItem('token');
         const role = localStorage.getItem('user_role');
@@ -79,17 +120,15 @@ const useAuthStore = create((set) => ({
             return;
         }
 
-        // For staff, restore minimal user data
         if (role === 'staff') {
             set({
                 user: { role: 'staff', name: 'Administrador', username: 'admin' },
                 token,
-                isAuthenticated: true
+                isAuthenticated: true,
             });
             return;
         }
 
-        // For clients, restore user data from localStorage if available
         const userData = localStorage.getItem('user_data');
         if (userData) {
             try {
@@ -101,11 +140,10 @@ const useAuthStore = create((set) => ({
             }
         }
 
-        // Fallback for clients if no data found
         set({
             user: { role: 'client' },
             token,
-            isAuthenticated: true
+            isAuthenticated: true,
         });
     },
 }));
