@@ -96,7 +96,7 @@ jobs:
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
           BASE="$HOME/domains/wifirapidito.com/public_html"
-          LIVE="$BASE/dist"
+          LIVE="$BASE"
           BACKUPS="$BASE/.frontend-backups"
           mkdir -p "$LIVE/assets" "$BACKUPS"
           stamp="$(date +%Y%m%d-%H%M%S)"
@@ -118,14 +118,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html/dist"
+          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
 
-          # Upload generated JS/CSS/assets first. Existing server files are preserved.
+          # Upload generated JS/CSS/assets first. Existing PHP/backend files are preserved.
           scp -i ~/.ssh/hostinger_deploy -P 65002 -r \
             dist/assets/. \
             "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/assets/"
 
-          # Switch index.html only after every referenced asset is present.
+          # Switch root index.html only after every referenced asset is present.
           scp -i ~/.ssh/hostinger_deploy -P 65002 \
             dist/index.html \
             "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/index.html.next"
@@ -141,6 +141,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html/dist"
+          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
-            "test -s '$REMOTE_BASE/index.html' && test -d '$REMOTE_BASE/assets' && echo 'Hostinger frontend deployment verified.'"
+            "test -s '$REMOTE_BASE/index.html' && test -d '$REMOTE_BASE/assets' && grep -q '/assets/' '$REMOTE_BASE/index.html' && echo 'Hostinger root frontend deployment verified.'"
