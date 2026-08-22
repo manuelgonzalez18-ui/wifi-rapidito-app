@@ -47,10 +47,15 @@ const useAuthStore = create((set) => ({
     login: async (username, password, options = {}) => {
         set({ isLoading: true, error: null });
         try {
-            const preferStaff = options.preferStaff === true || username === 'admin';
+            const isBootstrapAdmin = username === 'admin' || username === 'admin@wifi-rapidito';
+            const preferStaff = options.preferStaff === true || isBootstrapAdmin;
 
             if (preferStaff) {
-                const response = await api.post('/staff_auth.php', { username, password }, {
+                // WispHub identifies the bootstrap administrator as admin@wifi-rapidito,
+                // while the protected portal historically used the short alias "admin".
+                // Accept both without changing the administrator's portal password.
+                const staffUsername = isBootstrapAdmin ? 'admin' : username;
+                const response = await api.post('/staff_auth.php', { username: staffUsername, password }, {
                     timeout: 15000,
                     withCredentials: true,
                     headers: { 'Cache-Control': 'no-cache' },
