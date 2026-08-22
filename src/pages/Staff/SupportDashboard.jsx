@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     AlertTriangle, CalendarDays, CheckCircle2, Download, FileText, Filter,
-    HardHat, MapPinned, MessageSquare, Phone, RefreshCw, Search,
+    HardHat, KeyRound, MapPinned, MessageSquare, Phone, RefreshCw, Search,
     ShieldCheck, TicketCheck, UserRound, Wifi, Wrench,
 } from 'lucide-react';
 import api from '../../api/client';
@@ -126,7 +126,7 @@ const printReport = (tickets, title) => {
                 <div class="field"><span class="label">Creado</span>${escapeHtml(formatDateTime(ticket.created_at))}</div>
                 <div class="field"><span class="label">Actualizado / cierre</span>${escapeHtml(formatDateTime(ticket.updated_at))}</div>
             </div>
-            <div class="description"><span class="label">Descripción del reporte</span>${escapeHtml(stripHtml(ticket.description) || 'Sin descripción disponible.')}</div>
+            <div class="description"><span class="label">Descripción</span>${escapeHtml(stripHtml(ticket.description) || 'Sin descripción disponible.')}</div>
             ${extras ? `<div class="extra"><span class="label">Campos adicionales recibidos de WispHub</span><div class="extra-grid">${extras}</div></div>` : ''}
         </section>`;
     }).join('');
@@ -243,7 +243,7 @@ const StaffSupportDashboard = () => {
                     ['Requieren atención', metrics.open, Wrench, 'bg-amber-400/10 text-amber-300'],
                     ['Alta / urgente', metrics.priority, AlertTriangle, 'bg-red-400/10 text-red-300'],
                     ['Instalaciones', metrics.installations, HardHat, 'bg-violet-400/10 text-violet-300'],
-                    ['Cambio de contraseña', metrics.passwordChanges, MapPinned, 'bg-emerald-400/10 text-emerald-300'],
+                    ['Cambio de contraseña', metrics.passwordChanges, KeyRound, 'bg-emerald-400/10 text-emerald-300'],
                 ].map(([label, value, Icon, tone]) => <Surface key={label} className="p-4"><div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">{label}</p><p className="mt-2 text-2xl font-bold text-white">{value}</p></div><span className={`flex h-10 w-10 items-center justify-center rounded-xl ${tone}`}><Icon size={18} /></span></div></Surface>)}
             </div>
 
