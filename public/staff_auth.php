@@ -24,7 +24,7 @@ function respond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    respond(200, ['status' => 'ready', 'version' => '2.0-individual-staff']);
+    respond(200, ['status' => 'ready', 'version' => '2.1-admin-reset']);
 }
 
 function privateDirectory() {
@@ -41,6 +41,25 @@ function accessStorePath() {
 
 function directoryCachePath() {
     return privateDirectory() . '/staff-directory.json';
+}
+
+function adminPasswordHashPath() {
+    return privateDirectory() . '/admin-password.hash';
+}
+
+function adminPasswordHash() {
+    $path = adminPasswordHashPath();
+    if (is_file($path)) {
+        $hash = trim((string) @file_get_contents($path));
+        if ($hash !== '' && strlen($hash) >= 20) {
+            return $hash;
+        }
+    }
+
+    // Temporary compatibility fallback for installations that have not yet
+    // created the private administrator hash file. The private file always
+    // takes precedence once an administrator resets the password by SSH.
+    return '$2y$12$Qe647fBWvBkdPSBpvuBRCOMmN9UMfGIwLg2PadnxUlNQ0RlxBTFW2';
 }
 
 function loadJsonFile($path, $fallback = []) {
@@ -192,10 +211,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         respond(200, [
             'authenticated' => true,
             'user' => $user,
-            'version' => '2.0-individual-staff',
+            'version' => '2.1-admin-reset',
         ]);
     }
-    respond(401, ['authenticated' => false, 'version' => '2.0-individual-staff']);
+    respond(401, ['authenticated' => false, 'version' => '2.1-admin-reset']);
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -242,7 +261,7 @@ if ($action === 'directory') {
         'success' => true,
         'staff' => $result,
         'warning' => $warning,
-        'version' => '2.0-individual-staff',
+        'version' => '2.1-admin-reset',
     ]);
 }
 
@@ -295,10 +314,8 @@ if ($action === 'disable_access') {
 $username = normalizedUsername($input['username'] ?? '');
 $password = (string) ($input['password'] ?? '');
 
-// Bootstrap administrator credential. The plaintext password is never stored in source control.
-$staffPasswordHash = '$2y$12$Qe647fBWvBkdPSBpvuBRCOMmN9UMfGIwLg2PadnxUlNQ0RlxBTFW2';
-
-if ($username === 'admin' && password_verify($password, $staffPasswordHash)) {
+$isBootstrapAdmin = in_array($username, ['admin', 'admin@wifi-rapidito'], true);
+if ($isBootstrapAdmin && password_verify($password, adminPasswordHash())) {
     session_regenerate_id(true);
     $_SESSION['staff_authenticated'] = true;
     $_SESSION['staff_username'] = 'admin';
@@ -313,7 +330,7 @@ if ($username === 'admin' && password_verify($password, $staffPasswordHash)) {
         'success' => true,
         'user' => sessionUser(),
         'token' => 'staff-session',
-        'version' => '2.0-individual-staff',
+        'version' => '2.1-admin-reset',
     ]);
 }
 
@@ -346,6 +363,6 @@ respond(200, [
     'user' => sessionUser(),
     'token' => 'staff-session',
     'warning' => $warning,
-    'version' => '2.0-individual-staff',
+    'version' => '2.1-admin-reset',
 ]);
 ?>
