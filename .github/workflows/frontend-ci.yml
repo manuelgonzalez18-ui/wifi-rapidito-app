@@ -172,7 +172,7 @@ jobs:
           set -euo pipefail
           REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
-            "test -s '$REMOTE_BASE/index.html' && test -d '$REMOTE_BASE/assets' && test -s '$REMOTE_BASE/frontend-version.txt' && test -s '$REMOTE_BASE/login_wisphub.php' && test -s '$REMOTE_BASE/staff_auth.php' && test -s '$REMOTE_BASE/support_dashboard.php' && php -l '$REMOTE_BASE/login_wisphub.php' >/dev/null && php -l '$REMOTE_BASE/staff_auth.php' >/dev/null && php -l '$REMOTE_BASE/support_dashboard.php' >/dev/null && grep -q '/assets/' '$REMOTE_BASE/index.html' && grep -q '5.0-resilient' '$REMOTE_BASE/login_wisphub.php' && grep -q '2.0-individual-staff' '$REMOTE_BASE/staff_auth.php' && grep -q '1.1-support-permissions' '$REMOTE_BASE/support_dashboard.php' && echo 'Hostinger portal deployment verified.'"
+            "test -s '$REMOTE_BASE/index.html' && test -d '$REMOTE_BASE/assets' && test -s '$REMOTE_BASE/frontend-version.txt' && test -s '$REMOTE_BASE/login_wisphub.php' && test -s '$REMOTE_BASE/staff_auth.php' && test -s '$REMOTE_BASE/support_dashboard.php' && php -l '$REMOTE_BASE/login_wisphub.php' >/dev/null && php -l '$REMOTE_BASE/staff_auth.php' >/dev/null && php -l '$REMOTE_BASE/support_dashboard.php' >/dev/null && grep -q '/assets/' '$REMOTE_BASE/index.html' && grep -q '5.0-resilient' '$REMOTE_BASE/login_wisphub.php' && grep -q '2.1-admin-reset' '$REMOTE_BASE/staff_auth.php' && grep -q '1.1-support-permissions' '$REMOTE_BASE/support_dashboard.php' && echo 'Hostinger portal deployment verified.'"
 
       - name: Verify public Hostinger deployment
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -187,7 +187,7 @@ jobs:
             if [[ "$LIVE_SHA" == "$GITHUB_SHA" ]] \
               && grep -q '5.0-resilient' <<<"$LOGIN_HEALTH" \
               && grep -q '1.1-support-permissions' <<<"$SUPPORT_HEALTH" \
-              && grep -q '2.0-individual-staff' <<<"$STAFF_HEALTH"; then
+              && grep -q '2.1-admin-reset' <<<"$STAFF_HEALTH"; then
               echo "Public Hostinger frontend and portal backend verified."
               exit 0
             fi
