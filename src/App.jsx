@@ -19,6 +19,7 @@ const PaymentStoryView = lazy(() => import('./pages/Client/PaymentStoryView'));
 const ConnectionDoctor = lazy(() => import('./pages/ConnectionDoctor'));
 const StaffDashboard = lazy(() => import('./pages/Staff/Dashboard'));
 const StaffSupportDashboard = lazy(() => import('./pages/Staff/SupportDashboard'));
+const StaffAccess = lazy(() => import('./pages/Staff/StaffAccess'));
 const LiveMonitor = lazy(() => import('./pages/Admin/LiveMonitor'));
 const FinanceDashboard = lazy(() => import('./pages/Admin/FinanceDashboard'));
 
@@ -31,7 +32,13 @@ const RouteLoader = () => (
   </div>
 );
 
-const ProtectedRoute = ({ children, role }) => {
+const hasPermission = (user, permission) => {
+  if (!permission) return true;
+  const permissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  return permissions.includes('*') || permissions.includes(permission);
+};
+
+const ProtectedRoute = ({ children, role, permission }) => {
   const { isAuthenticated, user } = useAuthStore();
   const location = useLocation();
 
@@ -41,6 +48,11 @@ const ProtectedRoute = ({ children, role }) => {
 
   if (role && user?.role !== role) {
     return <Navigate to={user?.role === 'staff' ? '/staff' : '/client'} replace />;
+  }
+
+  if (permission && !hasPermission(user, permission)) {
+    const fallback = hasPermission(user, 'support') ? '/staff/support' : '/staff';
+    return <Navigate to={fallback} replace />;
   }
 
   return children;
@@ -91,14 +103,15 @@ function App() {
 
             <Route path="/staff" element={<ProtectedRoute role="staff"><Outlet /></ProtectedRoute>}>
               <Route index element={<StaffDashboard />} />
-              <Route path="support" element={<StaffSupportDashboard />} />
-              <Route path="clients" element={<Placeholder title="Gestión de clientes" description="Búsqueda y ficha operativa de clientes." />} />
-              <Route path="network" element={<Placeholder title="Estado de red" description="Resumen operativo e incidencias de red." />} />
-              <Route path="tools" element={<Placeholder title="Herramientas" description="Herramientas internas para personal autorizado." />} />
+              <Route path="support" element={<ProtectedRoute permission="support"><StaffSupportDashboard /></ProtectedRoute>} />
+              <Route path="access" element={<ProtectedRoute permission="manage_staff"><StaffAccess /></ProtectedRoute>} />
+              <Route path="clients" element={<ProtectedRoute permission="manage_staff"><Placeholder title="Gestión de clientes" description="Búsqueda y ficha operativa de clientes." /></ProtectedRoute>} />
+              <Route path="network" element={<ProtectedRoute permission="network"><Placeholder title="Estado de red" description="Resumen operativo e incidencias de red." /></ProtectedRoute>} />
+              <Route path="tools" element={<ProtectedRoute permission="manage_staff"><Placeholder title="Herramientas" description="Herramientas internas para personal autorizado." /></ProtectedRoute>} />
             </Route>
 
-            <Route path="/monitor/admin-control-center-2026" element={<ProtectedRoute role="staff"><LiveMonitor /></ProtectedRoute>} />
-            <Route path="/finance/internal-revenue-2026" element={<ProtectedRoute role="staff"><FinanceDashboard /></ProtectedRoute>} />
+            <Route path="/monitor/admin-control-center-2026" element={<ProtectedRoute role="staff" permission="network"><LiveMonitor /></ProtectedRoute>} />
+            <Route path="/finance/internal-revenue-2026" element={<ProtectedRoute role="staff" permission="finance"><FinanceDashboard /></ProtectedRoute>} />
           </Route>
 
           <Route path="/" element={<Navigate to="/login" replace />} />
