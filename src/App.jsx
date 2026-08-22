@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
-import { HashRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import useAuthStore from './auth/authStore';
 import DashboardLayout from './layouts/DashboardLayout';
@@ -33,8 +33,11 @@ const RouteLoader = () => (
 
 const ProtectedRoute = ({ children, role }) => {
   const { isAuthenticated, user } = useAuthStore();
+  const location = useLocation();
 
-  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
 
   if (role && user?.role !== role) {
     return <Navigate to={user?.role === 'staff' ? '/staff' : '/client'} replace />;
