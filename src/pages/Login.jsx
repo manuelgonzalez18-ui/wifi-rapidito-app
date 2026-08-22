@@ -1,15 +1,25 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { User, Lock, Wifi, ArrowRight, AlertCircle, Eye, EyeOff, Smartphone } from 'lucide-react';
+import { User, Lock, Wifi, ArrowRight, AlertCircle, Eye, EyeOff, Smartphone, ShieldCheck } from 'lucide-react';
 import useAuthStore from '../auth/authStore';
 
 const LoginPage = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const { login, isLoading, error } = useAuthStore();
     const [formData, setFormData] = useState({ username: '', password: '' });
     const [showPassword, setShowPassword] = useState(false);
     const [validationError, setValidationError] = useState('');
+
+    const requestedPath = typeof location.state?.from === 'string' && location.state.from.startsWith('/')
+        ? location.state.from
+        : null;
+    const staffDestination = requestedPath && (
+        requestedPath.startsWith('/staff') ||
+        requestedPath.startsWith('/monitor/') ||
+        requestedPath.startsWith('/finance/')
+    );
 
     const handleSubmit = async (event) => {
         event.preventDefault();
@@ -31,7 +41,15 @@ const LoginPage = () => {
 
         try {
             const user = await login(finalUsername, formData.password);
-            navigate(user.role === 'staff' ? '/staff' : '/client');
+
+            if (user.role === 'staff') {
+                const destination = staffDestination ? requestedPath : '/staff';
+                navigate(destination, { replace: true });
+                return;
+            }
+
+            const destination = requestedPath?.startsWith('/client') ? requestedPath : '/client';
+            navigate(destination, { replace: true });
         } catch {
             // The store exposes the user-facing error.
         }
@@ -99,6 +117,18 @@ const LoginPage = () => {
                                     Usa tu usuario y tu clave de acceso. Tu usuario es tu nombre y apellido pegados en minúsculas.
                                 </p>
                             </motion.div>
+
+                            {staffDestination ? (
+                                <div className="mt-5 flex items-start gap-3 rounded-xl border border-cyan-400/20 bg-cyan-400/[0.06] p-4">
+                                    <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-cyan-300" />
+                                    <div>
+                                        <p className="text-sm font-semibold text-cyan-100">Acceso de personal</p>
+                                        <p className="mt-1 text-xs leading-5 text-cyan-100/65">
+                                            Inicia sesión para abrir directamente el Dashboard de Soporte Técnico.
+                                        </p>
+                                    </div>
+                                </div>
+                            ) : null}
 
                             <form onSubmit={handleSubmit} className="mt-8 space-y-5">
                                 <div>
