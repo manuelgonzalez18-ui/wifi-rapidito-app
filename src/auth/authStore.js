@@ -44,12 +44,14 @@ const useAuthStore = create((set) => ({
     isLoading: false,
     error: null,
 
-    login: async (username, password) => {
+    login: async (username, password, options = {}) => {
         set({ isLoading: true, error: null });
         try {
-            if (username === 'admin') {
+            const preferStaff = options.preferStaff === true || username === 'admin';
+
+            if (preferStaff) {
                 const response = await api.post('/staff_auth.php', { username, password }, {
-                    timeout: 12000,
+                    timeout: 15000,
                     withCredentials: true,
                     headers: { 'Cache-Control': 'no-cache' },
                 });
