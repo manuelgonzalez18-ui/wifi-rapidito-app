@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     AlertTriangle, CalendarDays, CheckCircle2, Download, FileText, Filter,
-    HardHat, MapPinned, MessageSquare, Phone, RefreshCw, Search,
+    HardHat, KeyRound, MapPinned, MessageSquare, Phone, RefreshCw, Search,
     ShieldCheck, TicketCheck, UserRound, Wifi, Wrench,
 } from 'lucide-react';
 import api from '../../api/client';
@@ -214,7 +214,10 @@ const StaffSupportDashboard = () => {
         open: tickets.filter(isOpenTicket).length,
         priority: tickets.filter((ticket) => ['alta', 'urgente'].some((p) => normalize(ticket.priority).includes(p))).length,
         installations: tickets.filter((ticket) => normalize(ticket.subject) === 'instalacion').length,
-        routeChanges: tickets.filter((ticket) => normalize(ticket.subject) === 'cambio de ruta').length,
+        passwordChanges: tickets.filter((ticket) => {
+            const value = normalize(ticket.subject);
+            return value.includes('contrase') || value.includes('password') || value.includes('cambio de clave');
+        }).length,
     }), [tickets]);
 
     const clearFilters = () => {
@@ -240,7 +243,7 @@ const StaffSupportDashboard = () => {
                     ['Requieren atención', metrics.open, Wrench, 'bg-amber-400/10 text-amber-300'],
                     ['Alta / urgente', metrics.priority, AlertTriangle, 'bg-red-400/10 text-red-300'],
                     ['Instalaciones', metrics.installations, HardHat, 'bg-violet-400/10 text-violet-300'],
-                    ['Cambios de ruta', metrics.routeChanges, MapPinned, 'bg-emerald-400/10 text-emerald-300'],
+                    ['Cambio de contraseña', metrics.passwordChanges, KeyRound, 'bg-emerald-400/10 text-emerald-300'],
                 ].map(([label, value, Icon, tone]) => <Surface key={label} className="p-4"><div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">{label}</p><p className="mt-2 text-2xl font-bold text-white">{value}</p></div><span className={`flex h-10 w-10 items-center justify-center rounded-xl ${tone}`}><Icon size={18} /></span></div></Surface>)}
             </div>
 
