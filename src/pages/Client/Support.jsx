@@ -26,6 +26,8 @@ const SUBJECTS = [
     'Reubicacion Del Router',
     'Cambio De Contraseña En Router Wifi',
     'Falla Masiva En Mi Comunidad',
+    'Instalacion',
+    'Cambio De Ruta',
     'Otro Asunto'
 ];
 

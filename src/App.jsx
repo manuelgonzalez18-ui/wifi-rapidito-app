@@ -18,6 +18,7 @@ const ConfirmPromisePayment = lazy(() => import('./pages/Client/ConfirmPromisePa
 const PaymentStoryView = lazy(() => import('./pages/Client/PaymentStoryView'));
 const ConnectionDoctor = lazy(() => import('./pages/ConnectionDoctor'));
 const StaffDashboard = lazy(() => import('./pages/Staff/Dashboard'));
+const StaffSupportDashboard = lazy(() => import('./pages/Staff/SupportDashboard'));
 const LiveMonitor = lazy(() => import('./pages/Admin/LiveMonitor'));
 const FinanceDashboard = lazy(() => import('./pages/Admin/FinanceDashboard'));
 
@@ -87,6 +88,7 @@ function App() {
 
             <Route path="/staff" element={<ProtectedRoute role="staff"><Outlet /></ProtectedRoute>}>
               <Route index element={<StaffDashboard />} />
+              <Route path="support" element={<StaffSupportDashboard />} />
               <Route path="clients" element={<Placeholder title="Gestión de clientes" description="Búsqueda y ficha operativa de clientes." />} />
               <Route path="network" element={<Placeholder title="Estado de red" description="Resumen operativo e incidencias de red." />} />
               <Route path="tools" element={<Placeholder title="Herramientas" description="Herramientas internas para personal autorizado." />} />

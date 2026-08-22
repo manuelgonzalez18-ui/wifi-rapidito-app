@@ -3,6 +3,12 @@ import api from '../api/client';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const clearStoredAuth = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user_role');
+    localStorage.removeItem('user_data');
+};
+
 const isTransientLoginError = (error) => {
     const status = error?.response?.status;
     return (
@@ -41,12 +47,23 @@ const useAuthStore = create((set) => ({
     login: async (username, password) => {
         set({ isLoading: true, error: null });
         try {
-            // STAFF LOGIN
-            if (username === 'admin' && password === 'wifi2026') {
-                const user = { role: 'staff', name: 'Administrador', username: 'admin' };
-                localStorage.setItem('token', 'staff-token');
+            if (username === 'admin') {
+                const response = await api.post('/staff_auth.php', { username, password }, {
+                    timeout: 12000,
+                    withCredentials: true,
+                    headers: { 'Cache-Control': 'no-cache' },
+                });
+
+                if (!response?.data?.success || !response.data.user) {
+                    throw new Error(response?.data?.error || 'No pudimos iniciar la sesión del personal.');
+                }
+
+                const user = response.data.user;
+                const token = response.data.token || 'staff-session';
+                localStorage.setItem('token', token);
                 localStorage.setItem('user_role', 'staff');
-                set({ user, token: 'staff-token', isAuthenticated: true, isLoading: false });
+                localStorage.removeItem('user_data');
+                set({ user, token, isAuthenticated: true, isLoading: false });
                 return user;
             }
 
@@ -58,8 +75,6 @@ const useAuthStore = create((set) => ({
             let response;
             let lastError;
 
-            // A mobile connection can briefly change between Wi-Fi and cellular.
-            // Retry exactly once for transport/upstream errors, never for bad credentials.
             for (let attempt = 0; attempt < 2; attempt += 1) {
                 try {
                     response = await api.post('/login_wisphub.php', payload, {
@@ -104,10 +119,16 @@ const useAuthStore = create((set) => ({
         }
     },
 
-    logout: () => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user_role');
-        localStorage.removeItem('user_data');
+    logout: async () => {
+        const role = localStorage.getItem('user_role');
+        if (role === 'staff') {
+            try {
+                await api.post('/staff_auth.php', { action: 'logout' }, { withCredentials: true, timeout: 5000 });
+            } catch {
+                // Local logout must still complete if the server is temporarily unavailable.
+            }
+        }
+        clearStoredAuth();
         set({ user: null, token: null, isAuthenticated: false, error: null });
     },
 
@@ -121,12 +142,21 @@ const useAuthStore = create((set) => ({
         }
 
         if (role === 'staff') {
-            set({
-                user: { role: 'staff', name: 'Administrador', username: 'admin' },
-                token,
-                isAuthenticated: true,
-            });
-            return;
+            try {
+                const response = await api.get('/staff_auth.php', {
+                    withCredentials: true,
+                    timeout: 8000,
+                    headers: { 'Cache-Control': 'no-cache' },
+                });
+                if (response?.data?.authenticated && response.data.user) {
+                    set({ user: response.data.user, token, isAuthenticated: true });
+                    return;
+                }
+            } catch {
+                clearStoredAuth();
+                set({ isAuthenticated: false, user: null, token: null });
+                return;
+            }
         }
 
         const userData = localStorage.getItem('user_data');

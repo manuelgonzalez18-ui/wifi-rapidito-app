@@ -42,13 +42,14 @@ const Sidebar = ({ role }) => {
 
     const staffLinks = [
         { icon: LayoutDashboard, label: 'Resumen', to: '/staff' },
+        { icon: LifeBuoy, label: 'Soporte técnico', to: '/staff/support' },
         { icon: Users, label: 'Clientes', to: '/staff/clients' },
         { icon: Activity, label: 'Estado de red', to: '/staff/network' },
         { icon: Settings, label: 'Herramientas', to: '/staff/tools' },
     ];
 
     const links = role === 'staff' ? staffLinks : clientLinks;
-    const isActive = (to) => to === '/client'
+    const isActive = (to) => ['/client', '/staff'].includes(to)
         ? location.pathname === to
         : location.pathname === to || location.pathname.startsWith(`${to}/`);
 
