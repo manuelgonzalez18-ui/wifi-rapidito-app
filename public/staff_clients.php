@@ -7,7 +7,7 @@ header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('X-Content-Type-Options: nosniff');
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    echo json_encode(['status' => 'ready', 'version' => '1.0-staff-clients']);
+    echo json_encode(['status' => 'ready', 'version' => '1.1-staff-clients-offset']);
     exit;
 }
 
@@ -55,6 +55,8 @@ function wisphubGet($url, $apiKey, &$error = null) {
         CURLOPT_TIMEOUT => 14,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 3,
         CURLOPT_ENCODING => '',
     ]);
 
@@ -83,15 +85,25 @@ function wisphubGet($url, $apiKey, &$error = null) {
     return $data;
 }
 
-function fetchPaginated($firstUrl, $apiKey, $maxPages = 40, &$error = null) {
+function fetchPaginated($baseUrl, $apiKey, $maxPages = 40, &$error = null) {
     $items = [];
-    $url = $firstUrl;
     $page = 0;
+    $offset = 0;
+    $pageSize = 300;
+    $expectedTotal = null;
+    $separator = str_contains($baseUrl, '?') ? '&' : '?';
 
-    while ($url && $page < $maxPages) {
+    while ($page < $maxPages) {
         $page += 1;
+        $url = $baseUrl . $separator . 'limit=' . $pageSize . '&offset=' . $offset;
         $pageError = null;
         $data = wisphubGet($url, $apiKey, $pageError);
+
+        // Un segundo intento corto evita perder toda la paginación por una falla transitoria.
+        if ($data === null) {
+            usleep(250000);
+            $data = wisphubGet($url, $apiKey, $pageError);
+        }
 
         if ($data === null) {
             $error = $pageError;
@@ -99,15 +111,35 @@ function fetchPaginated($firstUrl, $apiKey, $maxPages = 40, &$error = null) {
         }
 
         if (isset($data['results']) && is_array($data['results'])) {
-            $items = array_merge($items, $data['results']);
-            $url = !empty($data['next']) && is_string($data['next']) ? $data['next'] : null;
-        } elseif (array_is_list($data)) {
-            $items = array_merge($items, $data);
-            $url = null;
-        } else {
-            $items[] = $data;
-            $url = null;
+            $batch = $data['results'];
+            if (isset($data['count']) && is_numeric($data['count'])) {
+                $expectedTotal = max(0, (int) $data['count']);
+            }
+
+            $items = array_merge($items, $batch);
+            $received = count($batch);
+
+            if ($received === 0) break;
+
+            $offset += $received;
+            if ($expectedTotal !== null && $offset >= $expectedTotal) break;
+
+            // Si WispHub no entrega count, next solo se usa como señal de que existe otra página.
+            if ($expectedTotal === null && $received < $pageSize && empty($data['next'])) break;
+            continue;
         }
+
+        if (array_is_list($data)) {
+            $items = array_merge($items, $data);
+            break;
+        }
+
+        $items[] = $data;
+        break;
+    }
+
+    if ($expectedTotal !== null && count($items) < $expectedTotal) {
+        $error = $error ?: 'pagination-incomplete';
     }
 
     return $items;
@@ -162,7 +194,7 @@ function normalizeStatusKind($value) {
     return 'unknown';
 }
 
-$cacheFile = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'wifi-rapidito-staff-clients-v1.json';
+$cacheFile = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'wifi-rapidito-staff-clients-v2.json';
 $cacheTtl = 120;
 $forceRefresh = isset($_GET['refresh']) && $_GET['refresh'] === '1';
 
@@ -176,7 +208,7 @@ if (!$forceRefresh && is_file($cacheFile) && (time() - filemtime($cacheFile)) < 
 
 $apiBase = rtrim(WISPHUB_API_URL, '/') . '/';
 $clientsError = null;
-$clients = fetchPaginated($apiBase . 'clientes/?limit=100', WISPHUB_TOKEN, 40, $clientsError);
+$clients = fetchPaginated($apiBase . 'clientes/', WISPHUB_TOKEN, 40, $clientsError);
 
 if ($clients === null) {
     if (is_file($cacheFile)) {
@@ -247,7 +279,7 @@ $payload = [
         'cached' => false,
         'stale' => false,
         'warning' => $clientsError ? 'No se pudo completar toda la paginación de clientes.' : null,
-        'version' => '1.0-staff-clients',
+        'version' => '1.1-staff-clients-offset',
     ],
 ];
 
