@@ -7,7 +7,7 @@ header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('X-Content-Type-Options: nosniff');
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    echo json_encode(['status' => 'ready', 'version' => '1.0-support-dashboard']);
+    echo json_encode(['status' => 'ready', 'version' => '1.1-support-permissions']);
     exit;
 }
 
@@ -30,6 +30,11 @@ function respondJson($status, $payload) {
 
 if (empty($_SESSION['staff_authenticated'])) {
     respondJson(401, ['error' => 'Sesión de personal requerida.']);
+}
+
+$permissions = is_array($_SESSION['staff_permissions'] ?? null) ? $_SESSION['staff_permissions'] : [];
+if (!in_array('*', $permissions, true) && !in_array('support', $permissions, true)) {
+    respondJson(403, ['error' => 'Tu cuenta no tiene permiso para consultar soporte técnico.']);
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
@@ -294,7 +299,7 @@ $payload = [
         'cached' => false,
         'stale' => false,
         'clients_warning' => $clientsError ? 'No se pudo completar toda la información de clientes.' : null,
-        'version' => '1.0-support-dashboard',
+        'version' => '1.1-support-permissions',
     ],
     'subjects' => [
         'Internet Lento',
