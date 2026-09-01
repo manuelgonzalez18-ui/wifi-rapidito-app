@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Home, FileText, CreditCard, LifeBuoy, Handshake, Activity, Settings, KeyRound } from 'lucide-react';
+import { Home, FileText, CreditCard, LifeBuoy, Handshake, Activity, Settings, KeyRound, ShieldOff } from 'lucide-react';
 import useAuthStore from '../../auth/authStore';
 
 const can = (user, permission) => {
@@ -23,6 +23,7 @@ const MobileNav = () => {
     const staffItems = [
         { icon: Home, label: 'Resumen', to: '/staff' },
         { icon: LifeBuoy, label: 'Soporte', to: '/staff/support', permission: 'support' },
+        { icon: ShieldOff, label: 'Promesas', to: '/staff/promise-restrictions', permission: 'manage_staff' },
         { icon: KeyRound, label: 'Accesos', to: '/staff/access', permission: 'manage_staff' },
         { icon: Activity, label: 'Red', to: '/staff/network', permission: 'network' },
         { icon: Settings, label: 'Tools', to: '/staff/tools', permission: 'manage_staff' },
@@ -34,7 +35,7 @@ const MobileNav = () => {
 
     return (
         <nav aria-label="Navegación principal" className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#07101d]/95 px-2 pt-2 backdrop-blur-2xl md:hidden safe-bottom">
-            <div className="mx-auto flex max-w-lg items-stretch justify-between gap-1">
+            <div className="mx-auto flex max-w-lg items-stretch justify-between gap-1 overflow-x-auto">
                 {navItems.map((item) => {
                     const isRoot = ['/client', '/staff'].includes(item.to);
                     const isActive = isRoot
@@ -47,7 +48,7 @@ const MobileNav = () => {
                             to={item.to}
                             end={isRoot}
                             aria-label={item.label}
-                            className={`relative flex min-h-14 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[10px] font-semibold transition ${isActive ? 'text-cyan-300' : 'text-slate-500 hover:text-slate-200'}`}
+                            className={`relative flex min-h-14 min-w-[62px] flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[10px] font-semibold transition ${isActive ? 'text-cyan-300' : 'text-slate-500 hover:text-slate-200'}`}
                         >
                             {isActive ? <span className="absolute inset-x-3 top-0 h-0.5 rounded-full bg-cyan-400" /> : null}
                             <item.icon size={19} strokeWidth={isActive ? 2.4 : 2} />

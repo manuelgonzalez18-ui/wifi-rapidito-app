@@ -1,0 +1,114 @@
+name: Promise Restrictions Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'public/promise_restrictions.php'
+      - 'public/promise_restrictions_lib.php'
+      - 'public/proxy_promises.php'
+      - 'vps/bot_logic.py'
+      - '.github/workflows/promise-restrictions-deploy.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'public/promise_restrictions.php'
+      - 'public/promise_restrictions_lib.php'
+      - 'public/proxy_promises.php'
+      - 'vps/bot_logic.py'
+      - '.github/workflows/promise-restrictions-deploy.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate backend syntax
+        run: |
+          php -l public/promise_restrictions_lib.php
+          php -l public/promise_restrictions.php
+          php -l public/proxy_promises.php
+          python -m py_compile vps/bot_logic.py
+
+      - name: Configure Hostinger SSH
+        if: github.event_name == 'push'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Backup and deploy restriction backend
+        if: github.event_name == 'push'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
+          stamp="$(date +%Y%m%d-%H%M%S)"
+
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            "mkdir -p '$REMOTE_BASE/.portal-backups' && cd '$REMOTE_BASE' && tar -czf '.portal-backups/promise-backend-$stamp.tar.gz' --ignore-failed-read proxy_promises.php promise_restrictions.php promise_restrictions_lib.php 2>/dev/null || true"
+
+          for file in promise_restrictions_lib.php promise_restrictions.php proxy_promises.php; do
+            scp -i ~/.ssh/hostinger_deploy -P 65002 \
+              "public/$file" \
+              "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/$file.next"
+            ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+              "php -l '$REMOTE_BASE/$file.next' >/dev/null && mv '$REMOTE_BASE/$file.next' '$REMOTE_BASE/$file'"
+          done
+
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            "find '$REMOTE_BASE/.portal-backups' -type f -name 'promise-backend-*.tar.gz' -mtime +14 -delete || true"
+
+      - name: Verify public backend
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            RESTRICTIONS="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/promise_restrictions.php?health=$GITHUB_SHA" 2>/dev/null || true)"
+            PROMISES="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/proxy_promises.php?health=$GITHUB_SHA" 2>/dev/null || true)"
+            if grep -q '1.0-promise-restrictions' <<<"$RESTRICTIONS" \
+              && grep -q '3.0-restriction-enforcement' <<<"$PROMISES"; then
+              echo 'Promise restriction backend verified.'
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Promise restriction backend public verification failed.'
+          exit 1
+
+      - name: Publish deployment status
+        if: success() && github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              context: 'Promise Restrictions Deploy',
+              description: 'Promise restriction backend deployed and verified',
+            });

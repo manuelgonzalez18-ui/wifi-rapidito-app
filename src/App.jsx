@@ -14,12 +14,14 @@ const Support = lazy(() => import('./pages/Client/Support'));
 const Settings = lazy(() => import('./pages/Client/Settings'));
 const AppDownload = lazy(() => import('./pages/AppDownload'));
 const RequestPromise = lazy(() => import('./pages/Client/RequestPromise'));
+const PromiseGate = lazy(() => import('./pages/Client/PromiseGate'));
 const ConfirmPromisePayment = lazy(() => import('./pages/Client/ConfirmPromisePayment'));
 const PaymentStoryView = lazy(() => import('./pages/Client/PaymentStoryView'));
 const ConnectionDoctor = lazy(() => import('./pages/ConnectionDoctor'));
 const StaffDashboard = lazy(() => import('./pages/Staff/Dashboard'));
 const StaffSupportDashboard = lazy(() => import('./pages/Staff/SupportDashboard'));
 const StaffAccess = lazy(() => import('./pages/Staff/StaffAccess'));
+const PromiseRestrictions = lazy(() => import('./pages/Staff/PromiseRestrictions'));
 const LiveMonitor = lazy(() => import('./pages/Admin/LiveMonitor'));
 const FinanceDashboard = lazy(() => import('./pages/Admin/FinanceDashboard'));
 
@@ -94,7 +96,7 @@ function App() {
               <Route path="invoices" element={<Invoices />} />
               <Route path="invoices/:id" element={<InvoiceDetail />} />
               <Route path="support" element={<Support />} />
-              <Route path="request-promise" element={<RequestPromise />} />
+              <Route path="request-promise" element={<PromiseGate><RequestPromise /></PromiseGate>} />
               <Route path="confirm-payment" element={<ConfirmPromisePayment />} />
               <Route path="payment-story" element={<PaymentStoryView />} />
               <Route path="doctor" element={<ConnectionDoctor />} />
@@ -105,6 +107,7 @@ function App() {
               <Route index element={<StaffDashboard />} />
               <Route path="support" element={<ProtectedRoute permission="support"><StaffSupportDashboard /></ProtectedRoute>} />
               <Route path="access" element={<ProtectedRoute permission="manage_staff"><StaffAccess /></ProtectedRoute>} />
+              <Route path="promise-restrictions" element={<ProtectedRoute permission="manage_staff"><PromiseRestrictions /></ProtectedRoute>} />
               <Route path="clients" element={<ProtectedRoute permission="manage_staff"><Placeholder title="Gestión de clientes" description="Búsqueda y ficha operativa de clientes." /></ProtectedRoute>} />
               <Route path="network" element={<ProtectedRoute permission="network"><Placeholder title="Estado de red" description="Resumen operativo e incidencias de red." /></ProtectedRoute>} />
               <Route path="tools" element={<ProtectedRoute permission="manage_staff"><Placeholder title="Herramientas" description="Herramientas internas para personal autorizado." /></ProtectedRoute>} />
