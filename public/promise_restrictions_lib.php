@@ -97,7 +97,9 @@ function pr_record_is_active($record, $at = null) {
     $atTs = $at ? strtotime($at) : time();
     $startTs = strtotime((string) ($record['starts_at'] ?? '')) ?: 0;
     $endTs = strtotime((string) ($record['ends_at'] ?? '')) ?: 0;
-    return $startTs <= $atTs && $endTs >= $atTs;
+    // ends_at represents the exact instant at which the benefit becomes
+    // available again, so the restriction is active strictly before it.
+    return $startTs <= $atTs && $endTs > $atTs;
 }
 
 function pr_records_match($record, $identifiers) {

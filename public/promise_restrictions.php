@@ -21,7 +21,7 @@ function pr_respond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    pr_respond(200, ['status' => 'ready', 'version' => '1.0-promise-restrictions']);
+    pr_respond(200, ['status' => 'ready', 'version' => '1.1-promise-restrictions']);
 }
 
 require_once __DIR__ . '/promise_restrictions_lib.php';
@@ -183,7 +183,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             $record['status'] = !empty($record['revoked_at']) ? 'revoked' : (pr_record_is_active($record) ? 'active' : 'expired');
             return $record;
         }, $records);
-        pr_respond(200, ['restrictions' => $result, 'version' => '1.0-promise-restrictions']);
+        pr_respond(200, ['restrictions' => $result, 'version' => '1.1-promise-restrictions']);
     }
 
     pr_respond(404, ['error' => 'Acción no encontrada.']);
@@ -216,7 +216,8 @@ if ($action === 'create') {
     }
 
     $startsAt = $date->setTime(0, 0, 0);
-    $endsAt = pr_add_months_clamped($date, 3)->setTime(23, 59, 59);
+    // ends_at is the exact instant the benefit becomes available again.
+    $endsAt = pr_add_months_clamped($date, 3)->setTime(0, 0, 0);
     $records = pr_load_records();
     $createdBy = (string) ($_SESSION['staff_username'] ?? 'admin');
 
@@ -239,7 +240,7 @@ if ($action === 'create') {
         'cedula' => $client['cedula'],
         'email' => $client['email'],
         'reason' => 'Incumplimiento de promesa de pago',
-        'note' => mb_substr($note, 0, 500),
+        'note' => substr($note, 0, 500),
         'incident_date' => $date->format('Y-m-d'),
         'starts_at' => $startsAt->format(DATE_ATOM),
         'ends_at' => $endsAt->format(DATE_ATOM),
