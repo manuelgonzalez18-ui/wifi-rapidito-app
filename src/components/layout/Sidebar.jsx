@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
     LogOut, Wifi, User, LayoutDashboard, CreditCard,
-    LifeBuoy, Users, Activity, Settings, FileText, Handshake, KeyRound
+    LifeBuoy, Users, Activity, Settings, FileText, Handshake, KeyRound, ShieldOff
 } from 'lucide-react';
 import useAuthStore from '../../auth/authStore';
 import { cn } from '../../utils';
@@ -42,6 +42,7 @@ const Sidebar = ({ role }) => {
     const staffLinks = [
         { icon: LayoutDashboard, label: 'Resumen', to: '/staff' },
         { icon: LifeBuoy, label: 'Soporte técnico', to: '/staff/support', permission: 'support' },
+        { icon: ShieldOff, label: 'Restricciones promesas', to: '/staff/promise-restrictions', permission: 'manage_staff' },
         { icon: KeyRound, label: 'Accesos del personal', to: '/staff/access', permission: 'manage_staff' },
         { icon: Users, label: 'Clientes', to: '/staff/clients', permission: 'manage_staff' },
         { icon: Activity, label: 'Estado de red', to: '/staff/network', permission: 'network' },
