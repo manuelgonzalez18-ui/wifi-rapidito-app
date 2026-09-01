@@ -7,6 +7,7 @@ on:
       - 'public/promise_restrictions.php'
       - 'public/promise_restrictions_lib.php'
       - 'public/proxy_promises.php'
+      - 'vps/bot_logic.py'
       - '.github/workflows/promise-restrictions-deploy.yml'
   pull_request:
     branches: [main]
@@ -14,6 +15,7 @@ on:
       - 'public/promise_restrictions.php'
       - 'public/promise_restrictions_lib.php'
       - 'public/proxy_promises.php'
+      - 'vps/bot_logic.py'
       - '.github/workflows/promise-restrictions-deploy.yml'
 
 permissions:
@@ -28,11 +30,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate PHP
+      - name: Validate backend syntax
         run: |
           php -l public/promise_restrictions_lib.php
           php -l public/promise_restrictions.php
           php -l public/proxy_promises.php
+          python -m py_compile vps/bot_logic.py
 
       - name: Configure Hostinger SSH
         if: github.event_name == 'push'
