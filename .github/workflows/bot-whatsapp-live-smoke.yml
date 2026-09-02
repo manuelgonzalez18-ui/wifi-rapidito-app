@@ -30,10 +30,17 @@ jobs:
           set -a
           source vps/.env
           set +a
-          test -n "$HOSTINGER_HOST"
-          if [[ "${WHATSAPP_PROVIDER:-evolution}" == "evolution" ]]; then
+
+          # Para la prueba desde GitHub usamos Meta directamente cuando las
+          # credenciales existen. Evolution solo es alcanzable dentro del VPS.
+          if [[ -n "${META_ACCESS_TOKEN:-}" && -n "${META_PHONE_NUMBER_ID:-}" ]]; then
+            export WHATSAPP_PROVIDER=meta
+          else
+            test -n "$HOSTINGER_HOST"
+            export WHATSAPP_PROVIDER=evolution
             export EVO_API_URL="http://$HOSTINGER_HOST:8080"
           fi
+
           cd vps
           python - <<'PY'
           import asyncio
@@ -45,7 +52,7 @@ jobs:
               provider = bot.WHATSAPP_PROVIDER
               if provider not in {"meta", "evolution"}:
                   raise SystemExit("Proveedor WhatsApp inválido")
-              print(f"WhatsApp provider configured: {provider}")
+              print(f"WhatsApp provider configured for smoke: {provider}")
               ok = await bot.enviar_whatsapp(
                   bot.ADMIN_REPORT_NUMBER,
                   "🧪 Prueba técnica de Rapidito: canal WhatsApp activo. No requiere respuesta.",
