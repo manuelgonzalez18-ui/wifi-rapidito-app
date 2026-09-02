@@ -335,34 +335,96 @@ async def wisphub_get(path, params=None):
 async def load_pending_invoices(identity):
     if not identity:
         return []
-    queries = []
-    if identity.get("service_id"):
-        queries.extend([
-            {"id_servicio": identity["service_id"], "limit": 50},
-            {"servicio": identity["service_id"], "limit": 50},
-        ])
-    if identity.get("username"):
-        queries.append({"cliente": identity["username"], "limit": 50})
+
+    service_id = str(identity.get("service_id") or "").strip()
+    username = normalize_username(identity.get("username"))
+
+    # Fuente principal recomendada por WispHub para portales/chatbots:
+    # el saldo del cliente ya trae únicamente sus facturas pendientes.
+    if service_id:
+        try:
+            payload = await wisphub_get(f"clientes/{service_id}/saldo/")
+            summaries = payload.get("facturas", []) if isinstance(payload, dict) else []
+            if not isinstance(summaries, list):
+                summaries = []
+
+            unique = {}
+            for summary in summaries:
+                if not isinstance(summary, dict):
+                    continue
+
+                iid = invoice_id(summary)
+                invoice = dict(summary)
+
+                # Enriquecer con el detalle real para conservar estado, folio
+                # y demás campos que usan las respuestas del asistente.
+                if iid:
+                    try:
+                        detail = await wisphub_get(f"facturas/{iid}/")
+                        if isinstance(detail, dict):
+                            invoice.update(detail)
+                    except Exception as exc:
+                        logger.info("Detalle de factura %s no disponible: %s", iid, exc)
+
+                if not invoice.get("estado"):
+                    invoice["estado"] = "Pendiente de Pago"
+
+                iid = invoice_id(invoice) or iid
+                if iid and is_pending_invoice(invoice):
+                    unique[iid] = invoice
+
+            return sorted(
+                unique.values(),
+                key=lambda item: int(invoice_id(item) or 0),
+                reverse=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Consulta oficial de saldo WispHub falló service_id=%s: %s",
+                service_id,
+                exc,
+            )
+
+    # Fallback solamente para identidades antiguas sin id_servicio.
+    # Aunque WispHub ignore el filtro remoto, verificamos localmente
+    # que la factura pertenezca al usuario antes de aceptarla.
+    if not username:
+        return []
+
+    try:
+        payload = await wisphub_get("facturas/", params={"cliente": username, "limit": 50})
+    except Exception as exc:
+        logger.info("Fallback de facturas falló usuario=%s: %s", username, exc)
+        return []
+
+    items = payload.get("results", []) if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return []
 
     unique = {}
-    for params in queries:
-        try:
-            payload = await wisphub_get("facturas/", params=params)
-        except Exception as exc:
-            logger.info("Consulta de facturas falló params=%s: %s", params, exc)
+    for item in items:
+        if not isinstance(item, dict) or not is_pending_invoice(item):
             continue
-        items = payload.get("results", []) if isinstance(payload, dict) else payload
-        if not isinstance(items, list):
+        client = item.get("cliente")
+        invoice_username = ""
+        if isinstance(client, dict):
+            invoice_username = normalize_username(
+                client.get("usuario") or client.get("usuario_portal") or client.get("username")
+            )
+        elif client not in (None, ""):
+            invoice_username = normalize_username(client)
+
+        if invoice_username != username:
             continue
-        for item in items:
-            if not isinstance(item, dict) or not is_pending_invoice(item):
-                continue
-            iid = invoice_id(item)
-            if iid:
-                unique[iid] = item
-        if unique:
-            break
-    return sorted(unique.values(), key=lambda item: int(invoice_id(item) or 0), reverse=True)
+        iid = invoice_id(item)
+        if iid:
+            unique[iid] = item
+
+    return sorted(
+        unique.values(),
+        key=lambda item: int(invoice_id(item) or 0),
+        reverse=True,
+    )
 
 
 async def get_bcv_rate():
