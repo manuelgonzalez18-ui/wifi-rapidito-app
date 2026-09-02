@@ -169,7 +169,47 @@ async def handle_payment_flow(numero_cliente, state, mensaje):
         )
         return
 
+    if state["mode"] == "PAYMENT_AMOUNT":
+        amount = bot.normalize_amount(mensaje)
+        if amount is None:
+            await bot.enviar_whatsapp(numero_cliente, "Monto inválido. Ejemplo: *19498.81*")
+            return
+        data["amount"] = amount
+        state["mode"] = "PAYMENT_DATE"
+        await bot.enviar_whatsapp(
+            numero_cliente,
+            "📅 *Fecha del pago (DD/MM/AAAA):*\nEjemplo: 22/08/2026",
+        )
+        return
+
     await _previous_payment_flow(numero_cliente, state, mensaje)
+
+
+async def show_service_status(numero_cliente, state):
+    identity = state.get("identity")
+    if not identity:
+        await bot.enviar_whatsapp(numero_cliente, "Escribe *MENU* para identificar tu cuenta.")
+        return
+
+    username = identity.get("username")
+    if username:
+        refreshed = await entry.find_client_by_username(username)
+        if refreshed:
+            identity = refreshed
+            state["identity"] = refreshed
+
+    status = str(identity.get("status") or "").strip().lower()
+    if "suspend" in status or "cort" in status:
+        label = "🔴 *Suspendido*"
+    elif "activ" in status:
+        label = "🟢 *Activo*"
+    else:
+        label = "📊 *Sin estado disponible*"
+
+    await bot.enviar_whatsapp(
+        numero_cliente,
+        f"📊 *Estado de mi Servicio*\n\nEstado: {label}\n\nEscribe *menu* para volver al menú.",
+    )
 
 
 bot.bank_details_text = bank_details_text
@@ -178,5 +218,6 @@ bot.banks_text = banks_text
 bot.handle_debt = handle_debt
 bot.start_payment = start_payment
 bot.handle_payment_flow = handle_payment_flow
+bot.show_service_status = show_service_status
 
 app = bot.app
