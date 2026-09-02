@@ -38,41 +38,44 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$HOSTINGER_USER"
-          candidates=("193.203.188.215")
-          if [[ -n "${HOSTINGER_HOST:-}" && "$HOSTINGER_HOST" != "193.203.188.215" ]]; then candidates+=("$HOSTINGER_HOST"); fi
 
-          TARGET_HOST=''; SSH_PORT=''; BOT_DIR=''
-          for host in "${candidates[@]}"; do
-            for port in 22 65002; do
-              SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$port" -o BatchMode=yes -o ConnectTimeout=7 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-              if ! timeout 10 "${SSH[@]}" "$HOSTINGER_USER@$host" 'command -v docker >/dev/null 2>&1' >/dev/null 2>&1; then
-                continue
-              fi
-              candidate_dir="$("${SSH[@]}" "$HOSTINGER_USER@$host" 'for base in "$HOME" /opt /srv; do [[ -d "$base" ]] || continue; find "$base" -maxdepth 8 -type f \( -name docker-compose.yml -o -name compose.yml \) -print 2>/dev/null; done | while IFS= read -r f; do if grep -q "bot_backend:" "$f"; then dirname "$f"; break; fi; done')"
-              if [[ -n "$candidate_dir" ]]; then
-                TARGET_HOST="$host"; SSH_PORT="$port"; BOT_DIR="$candidate_dir"; break 2
-              fi
+          TARGET_HOST=''; TARGET_USER=''; SSH_PORT=''; BOT_DIR=''
+          # Primero se prueba el IP productivo con el usuario configurado y
+          # usuarios estándar de VPS; después el host del despliegue web.
+          hosts=("193.203.188.215")
+          if [[ -n "${HOSTINGER_HOST:-}" && "$HOSTINGER_HOST" != "193.203.188.215" ]]; then hosts+=("$HOSTINGER_HOST"); fi
+
+          for host in "${hosts[@]}"; do
+            users=("$HOSTINGER_USER")
+            if [[ "$host" == "193.203.188.215" ]]; then users+=(root ubuntu debian); fi
+            for user in "${users[@]}"; do
+              for port in 22 65002; do
+                SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+                if ! timeout 8 "${SSH[@]}" "$user@$host" 'command -v docker >/dev/null 2>&1' >/dev/null 2>&1; then continue; fi
+                candidate_dir="$("${SSH[@]}" "$user@$host" 'for base in "$HOME" /opt /srv /root; do [[ -d "$base" ]] || continue; find "$base" -maxdepth 8 -type f \( -name docker-compose.yml -o -name compose.yml \) -print 2>/dev/null; done | while IFS= read -r f; do if grep -q "bot_backend:" "$f"; then dirname "$f"; break; fi; done')"
+                if [[ -n "$candidate_dir" ]]; then TARGET_HOST="$host"; TARGET_USER="$user"; SSH_PORT="$port"; BOT_DIR="$candidate_dir"; break 3; fi
+              done
             done
           done
+
           test -n "$TARGET_HOST"
           echo "::add-mask::$TARGET_HOST"
+          echo "::add-mask::$TARGET_USER"
           echo "::add-mask::$BOT_DIR"
-          printf 'TARGET_HOST=%s\nSSH_PORT=%s\nBOT_DIR=%s\n' "$TARGET_HOST" "$SSH_PORT" "$BOT_DIR" >> "$GITHUB_ENV"
+          printf 'TARGET_HOST=%s\nTARGET_USER=%s\nSSH_PORT=%s\nBOT_DIR=%s\n' "$TARGET_HOST" "$TARGET_USER" "$SSH_PORT" "$BOT_DIR" >> "$GITHUB_ENV"
 
       - name: Stage reconstruction and run non-destructive check
-        env:
-          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
         shell: bash
         run: |
           set -euo pipefail
           SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
           SCP=(scp -q -i ~/.ssh/hostinger_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
           STAGE="$BOT_DIR/.live-preflight-$GITHUB_SHA"
-          "${SSH[@]}" "$HOSTINGER_USER@$TARGET_HOST" "mkdir -p '$STAGE'"
+          "${SSH[@]}" "$TARGET_USER@$TARGET_HOST" "mkdir -p '$STAGE'"
           files=(bot_logic.py bot_entry.py bot_presentation.py bot_flows.py test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py validate_bot_env.py deploy_bot_local.sh reset_whatsapp.sh set_webhook.py get_qr.py requirements-bot.txt Dockerfile.bot)
-          for file in "${files[@]}"; do "${SCP[@]}" "vps/$file" "$HOSTINGER_USER@$TARGET_HOST:$STAGE/$file"; done
+          for file in "${files[@]}"; do "${SCP[@]}" "vps/$file" "$TARGET_USER@$TARGET_HOST:$STAGE/$file"; done
 
-          "${SSH[@]}" "$HOSTINGER_USER@$TARGET_HOST" "BOT_DIR='$BOT_DIR' STAGE='$STAGE' bash -s" <<'REMOTE'
+          "${SSH[@]}" "$TARGET_USER@$TARGET_HOST" "BOT_DIR='$BOT_DIR' STAGE='$STAGE' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$BOT_DIR"
           test -f .env
@@ -96,10 +99,8 @@ jobs:
           REMOTE
 
       - name: Confirm production bot remains running
-        env:
-          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
         shell: bash
         run: |
           set -euo pipefail
           SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-          "${SSH[@]}" "$HOSTINGER_USER@$TARGET_HOST" "cd '$BOT_DIR' && docker compose ps bot_backend && curl -fsS http://127.0.0.1:5000/webhook"
+          "${SSH[@]}" "$TARGET_USER@$TARGET_HOST" "cd '$BOT_DIR' && docker compose ps bot_backend && curl -fsS http://127.0.0.1:5000/webhook"
