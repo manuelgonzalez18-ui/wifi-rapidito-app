@@ -69,6 +69,20 @@ jobs:
             foreach ($counts as $s=>$n) echo "status_" . preg_replace("/[^A-Za-z0-9_-]/","_",$s) . "=" . $n . "\n";
           ' "$LIB"
 
+          echo '=== Registration errors sanitized ==='
+          php -r '
+            require $argv[1];
+            foreach (payment_registry_all_records() as $r) {
+              if (!is_array($r) || (($r["status"] ?? "") !== "registration_error")) continue;
+              $invoice=preg_replace("/[^0-9]/", "", (string)($r["invoice_id"] ?? ""));
+              $source=preg_replace("/[^A-Za-z0-9_-]/", "", (string)($r["source"] ?? "unknown"));
+              $updated=preg_replace("/[^0-9T:+.-]/", "", (string)($r["updated_at"] ?? ""));
+              $error=preg_replace("/\s+/", " ", trim((string)($r["registration_error"] ?? "")));
+              $error=substr($error,0,220);
+              echo "invoice=" . ($invoice ?: "unknown") . " source=" . ($source ?: "unknown") . " updated=" . $updated . " error=" . $error . "\n";
+            }
+          ' "$LIB"
+
           echo '=== Nearby payment files metadata only ==='
           PRIVATE="$(dirname "$BASE")/.wifi-rapidito-private"
           if [ -d "$PRIVATE" ]; then
