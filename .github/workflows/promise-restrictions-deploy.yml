@@ -2,10 +2,11 @@ name: Promise Restrictions Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, reconstruccion-bot-10-opciones]
     paths:
       - 'public/promise_restrictions.php'
       - 'public/promise_restrictions_lib.php'
+      - 'public/promise_email_ingest.php'
       - 'public/proxy_promises.php'
       - 'vps/Dockerfile.bot'
       - 'vps/requirements-bot.txt'
@@ -28,6 +29,7 @@ on:
     paths:
       - 'public/promise_restrictions.php'
       - 'public/promise_restrictions_lib.php'
+      - 'public/promise_email_ingest.php'
       - 'public/proxy_promises.php'
       - 'vps/Dockerfile.bot'
       - 'vps/requirements-bot.txt'
@@ -65,6 +67,7 @@ jobs:
         run: |
           php -l public/promise_restrictions_lib.php
           php -l public/promise_restrictions.php
+          php -l public/promise_email_ingest.php
           php -l public/proxy_promises.php
           python -m py_compile \
             vps/bot_flows.py \
@@ -113,9 +116,9 @@ jobs:
           stamp="$(date +%Y%m%d-%H%M%S)"
 
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
-            "mkdir -p '$REMOTE_BASE/.portal-backups' && cd '$REMOTE_BASE' && tar -czf '.portal-backups/promise-backend-$stamp.tar.gz' --ignore-failed-read proxy_promises.php promise_restrictions.php promise_restrictions_lib.php 2>/dev/null || true"
+            "mkdir -p '$REMOTE_BASE/.portal-backups' && cd '$REMOTE_BASE' && tar -czf '.portal-backups/promise-backend-$stamp.tar.gz' --ignore-failed-read proxy_promises.php promise_restrictions.php promise_restrictions_lib.php promise_email_ingest.php 2>/dev/null || true"
 
-          for file in promise_restrictions_lib.php promise_restrictions.php proxy_promises.php; do
+          for file in promise_restrictions_lib.php promise_restrictions.php promise_email_ingest.php proxy_promises.php; do
             scp -i ~/.ssh/hostinger_deploy -P 65002 \
               "public/$file" \
               "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/$file.next"
@@ -133,8 +136,10 @@ jobs:
           set -euo pipefail
           for attempt in {1..12}; do
             RESTRICTIONS="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/promise_restrictions.php?health=$GITHUB_SHA" 2>/dev/null || true)"
+            EMAIL_INGEST="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/promise_email_ingest.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             PROMISES="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/proxy_promises.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             if grep -q '1.1-promise-restrictions' <<<"$RESTRICTIONS" \
+              && grep -q '1.0-promise-email-ingest' <<<"$EMAIL_INGEST" \
               && grep -q '3.0-restriction-enforcement' <<<"$PROMISES"; then
               echo 'Promise restriction backend verified.'
               exit 0
