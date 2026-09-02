@@ -71,6 +71,40 @@ function payment_clean_text($value, $max = 200) {
     return function_exists('mb_substr') ? mb_substr($text, 0, $max) : substr($text, 0, $max);
 }
 
+/**
+ * Construye el segundo parámetro certificado del adaptador Banesco productivo.
+ * El mismo contrato acepta los nombres canónicos de Banesco y los nombres
+ * históricos usados por el portal, por eso enviamos ambos alias.
+ */
+function payment_banesco_options($datos, $montoEnviado) {
+    $paymentType = strtolower(payment_clean_text($_POST['payment_type'] ?? '', 40));
+    $bankId = payment_clean_text($_POST['bankId'] ?? $_POST['banco_origen'] ?? '', 40);
+    $phoneNum = payment_clean_text($_POST['phoneNum'] ?? $_POST['phone_emisor'] ?? '', 40);
+
+    // En las modalidades Banesco → Banesco el formulario no muestra selector
+    // de banco, pero Banesco sí necesita identificar el banco de origen.
+    if ($bankId === '' && in_array($paymentType, ['pm_banesco', 'tf_banesco'], true)) {
+        $bankId = '0134';
+    }
+
+    $options = [
+        'amount' => (float) $montoEnviado,
+        'paymentDate' => $datos['fecha_pago'],
+        'payment_date' => $datos['fecha_pago'],
+    ];
+
+    if ($bankId !== '') {
+        $options['bankId'] = $bankId;
+        $options['banco_origen'] = $bankId;
+    }
+    if ($phoneNum !== '') {
+        $options['phoneNum'] = $phoneNum;
+        $options['phone_emisor'] = $phoneNum;
+    }
+
+    return $options;
+}
+
 function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago, $totalCobrado) {
     $url = rtrim(WISPHUB_API_URL, '/') . '/facturas/registrar-pago/' . rawurlencode((string) $facturaId) . '/';
     $payload = [
@@ -221,7 +255,18 @@ try {
     if ($formaPagoId === 16749) {
         require_once __DIR__ . '/banesco_api.php';
         $montoEnviado = (float) ($_POST['amount'] ?? 0);
-        $banescoResponse = BanescoAPI::checkTransaction($reference);
+        if ($montoEnviado <= 0) {
+            payment_respond(422, [
+                'status' => 'error',
+                'code' => 'invalid_amount',
+                'wisphub' => false,
+                'message' => 'El monto del pago debe ser mayor a cero.',
+                'errors' => ['El monto del pago debe ser mayor a cero.'],
+            ]);
+        }
+
+        $banescoOptions = payment_banesco_options($datos, $montoEnviado);
+        $banescoResponse = BanescoAPI::checkTransaction($reference, $banescoOptions);
 
         if (empty($banescoResponse['success'])) {
             $message = payment_clean_text($banescoResponse['message'] ?? 'No se pudo validar la operación.', 300);
