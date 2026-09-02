@@ -30,13 +30,6 @@ if [[ "$MODE" == "check" ]]; then
   exit 0
 fi
 
-stamp="$(date +%Y%m%d-%H%M%S)"
-backup_dir=".bot-backups/$stamp"
-mkdir -p "$backup_dir"
-for file in bot_logic.py bot_flows.py validate_bot_env.py set_webhook.py get_qr.py reset_whatsapp.sh; do
-  [[ -f "$file" ]] && cp -a "$file" "$backup_dir/$file"
-done
-
 echo "🚀 Reiniciando únicamente bot_backend..."
 docker compose up -d --no-deps bot_backend
 
@@ -52,5 +45,5 @@ done
 echo "❌ El bot no respondió con la versión esperada."
 echo "Últimos logs:"
 docker compose logs --tail=120 bot_backend || true
-echo "Backup previo disponible en: $backup_dir"
+echo "Restaura el respaldo realizado antes de copiar esta versión y reconstruye bot_backend."
 exit 1
