@@ -1,0 +1,60 @@
+name: Bot Live Readonly
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-live-readonly.yml'
+      - 'vps/LIVE_READONLY_TRIGGER'
+
+permissions:
+  contents: read
+
+jobs:
+  live-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install bot dependencies
+        run: python -m pip install --disable-pip-version-check -r vps/requirements-bot.txt
+
+      - name: Read-only WispHub and BCV checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source vps/.env
+          set +a
+          cd vps
+          python - <<'PY'
+          import asyncio
+          import bot_presentation as presentation
+
+          bot = presentation.bot
+          entry = presentation.entry
+
+          async def main():
+              clients = await bot.load_wisphub_clients(force=True)
+              if not clients:
+                  raise SystemExit("WispHub no devolvió clientes")
+              print(f"WISPHUB_CLIENTS_OK=1 count={len(clients)}")
+
+              # Cuenta observada en las capturas históricas; solo se realizan lecturas.
+              identity = await entry.find_client_by_username("nakaryburguillo")
+              if not identity:
+                  raise SystemExit("No se encontró la cuenta de validación en WispHub")
+              print("WISPHUB_USERNAME_LOOKUP_OK=1")
+
+              invoices = await bot.load_pending_invoices(identity)
+              print(f"WISPHUB_INVOICES_READ_OK=1 pending_count={len(invoices)}")
+
+              rate = await bot.get_bcv_rate()
+              if rate <= 0:
+                  raise SystemExit("Tasa BCV inválida")
+              print("BCV_LIVE_OK=1")
+
+          asyncio.run(main())
+          PY
