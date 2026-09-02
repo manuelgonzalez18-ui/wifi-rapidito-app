@@ -15,7 +15,22 @@ Variables especialmente importantes:
 - `ADMIN_REPORT_NUMBER=584120330315`
 - URLs de `PAYMENT_PROXY_URL`, `PROMISE_PROXY_URL`, `PROMISE_RESTRICTIONS_URL` y `TICKET_PROXY_URL`
 
-## 2. Copiar los archivos de la reconstrucción
+## 2. Respaldar la versión productiva actual
+
+**Hacer este respaldo antes de copiar los archivos nuevos.**
+
+```bash
+stamp="$(date +%Y%m%d-%H%M%S)"
+mkdir -p ".bot-backups/$stamp"
+cp -a bot_logic.py ".bot-backups/$stamp/" 2>/dev/null || true
+cp -a bot_flows.py ".bot-backups/$stamp/" 2>/dev/null || true
+cp -a set_webhook.py get_qr.py reset_whatsapp.sh ".bot-backups/$stamp/" 2>/dev/null || true
+echo "Backup: .bot-backups/$stamp"
+```
+
+El `.env` productivo no se reemplaza ni se copia desde GitHub.
+
+## 3. Copiar los archivos de la reconstrucción
 
 Actualizar en el directorio VPS, como mínimo:
 
@@ -30,7 +45,7 @@ Actualizar en el directorio VPS, como mínimo:
 
 Mantener el `.env` existente.
 
-## 3. Ejecutar preflight sin reiniciar
+## 4. Ejecutar preflight sin reiniciar
 
 ```bash
 chmod +x deploy_bot_local.sh reset_whatsapp.sh
@@ -48,7 +63,7 @@ El modo `check`:
 
 No continuar si este paso falla.
 
-## 4. Desplegar el backend reconstruido
+## 5. Desplegar el backend reconstruido
 
 ```bash
 ./deploy_bot_local.sh deploy
@@ -56,7 +71,7 @@ No continuar si este paso falla.
 
 El script reinicia únicamente `bot_backend`, sin bajar Evolution, PostgreSQL ni Redis, y espera que `GET /webhook` devuelva la versión `4.0-bot-10-opciones`.
 
-## 5. Verificación inicial
+## 6. Verificación inicial
 
 ```bash
 docker compose ps bot_backend
@@ -70,7 +85,7 @@ La respuesta de salud debe contener:
 4.0-bot-10-opciones
 ```
 
-## 6. Prueba punta a punta recomendada
+## 7. Prueba punta a punta recomendada
 
 Usar un cliente de prueba y validar, en este orden:
 
@@ -86,13 +101,13 @@ Usar un cliente de prueba y validar, en este orden:
 
 ## Rollback
 
-`deploy_bot_local.sh` deja respaldo local en `.bot-backups/<fecha-hora>/` antes del reinicio. Si el health check falla, revisar logs y restaurar los archivos respaldados antes de reconstruir `bot_backend`.
+Si el health check falla, revisar logs y restaurar el respaldo creado **antes** de copiar la reconstrucción.
 
 Ejemplo:
 
 ```bash
 cp .bot-backups/AAAAMMDD-HHMMSS/bot_logic.py ./bot_logic.py
-cp .bot-backups/AAAAMMDD-HHMMSS/bot_flows.py ./bot_flows.py
+cp .bot-backups/AAAAMMDD-HHMMSS/bot_flows.py ./bot_flows.py 2>/dev/null || true
 docker compose build bot_backend
 docker compose up -d --no-deps bot_backend
 ```
