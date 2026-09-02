@@ -49,7 +49,7 @@ jobs:
           mkdir -p "$BACKUP/files"
           chmod 700 "$BACKUP"
           cd "$APP"
-          for f in .env docker-compose.yml Dockerfile.bot requirements-bot.txt bot_logic.py bot_entry.py bot_presentation.py bot_flows.py; do
+          for f in .env docker-compose.yml Dockerfile.bot requirements-bot.txt bot_logic.py bot_entry.py bot_presentation.py bot_flows.py kommo_service.py; do
             [[ -f "$f" ]] && cp -a "$f" "$BACKUP/files/$f"
           done
           docker inspect bot_backend > "$BACKUP/docker-inspect-bot_backend.json"
@@ -64,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           files=(
-            bot_logic.py bot_entry.py bot_presentation.py bot_flows.py
+            bot_logic.py bot_entry.py bot_presentation.py bot_flows.py kommo_service.py
             validate_bot_env.py
             test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py
             requirements-bot.txt Dockerfile.bot
