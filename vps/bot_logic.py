@@ -1,5 +1,9 @@
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
+import hashlib
+import hmac
 import httpx
+import json
 import os
 import logging
 import time
@@ -11,9 +15,21 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("wifi-rapidito-bot")
 
 # --- CONFIGURACIÓN ---
+WHATSAPP_PROVIDER = os.getenv("WHATSAPP_PROVIDER", "evolution").strip().lower()
+
+# Evolution se conserva como compatibilidad/fallback. El número principal de
+# Wifi Rapidito funciona mediante Meta WhatsApp Business Platform.
 EVO_API_URL = os.getenv("EVO_API_URL", "http://evolution_api:8080")
 EVO_API_KEY = os.getenv("EVO_API_KEY", "")
 INSTANCE_NAME = os.getenv("INSTANCE_NAME", "rapidito_bot")
+
+# Meta WhatsApp Cloud API. Ninguna de estas credenciales debe guardarse en Git.
+META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
+META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID", "")
+META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "")
+META_APP_SECRET = os.getenv("META_APP_SECRET", "")
+META_GRAPH_VERSION = os.getenv("META_GRAPH_VERSION", "v23.0")
+
 WISPHUB_API_URL = os.getenv("WISPHUB_API_URL", "https://api.wisphub.app/api")
 WISPHUB_API_KEY = os.getenv("WISPHUB_API_KEY", "")
 PROMISE_RESTRICTIONS_URL = os.getenv(
@@ -25,6 +41,8 @@ PROMISE_RESTRICTIONS_URL = os.getenv(
 user_states = {}
 _client_cache = {"loaded_at": 0.0, "clients": []}
 CLIENT_CACHE_TTL = 300
+_processed_message_ids = {}
+MESSAGE_DEDUPE_TTL = 900
 
 # --- MENÚS Y RESPUESTAS ---
 MENU_BIENVENIDA = """
@@ -138,6 +156,31 @@ def scalar_id(value):
     return str(value or "").strip()
 
 
+def mark_message_once(message_id):
+    if not message_id:
+        return True
+    now = time.monotonic()
+    expired = [key for key, seen_at in _processed_message_ids.items() if now - seen_at > MESSAGE_DEDUPE_TTL]
+    for key in expired:
+        _processed_message_ids.pop(key, None)
+    if message_id in _processed_message_ids:
+        return False
+    _processed_message_ids[message_id] = now
+    return True
+
+
+def verify_meta_signature(raw_body, signature_header):
+    if not META_APP_SECRET:
+        # Meta permite validar el webhook con verify token. La firma se activa
+        # automáticamente cuando META_APP_SECRET se configura en el VPS.
+        return True
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    expected = hmac.new(META_APP_SECRET.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    received = signature_header.split("=", 1)[1]
+    return hmac.compare_digest(expected, received)
+
+
 async def load_wisphub_clients(force=False):
     now = time.monotonic()
     if not force and _client_cache["clients"] and now - _client_cache["loaded_at"] < CLIENT_CACHE_TTL:
@@ -245,79 +288,177 @@ Esta medida solo afecta nuevas promesas. Puedes continuar usando normalmente las
 
 
 async def enviar_whatsapp(numero, texto):
-    url = f"{EVO_API_URL}/message/sendText/{INSTANCE_NAME}"
-    headers = {"apikey": EVO_API_KEY}
-    payload = {"number": numero, "text": texto, "delay": 500, "linkPreview": True}
+    phone = normalize_phone(numero)
+    if WHATSAPP_PROVIDER == "meta":
+        if not META_ACCESS_TOKEN or not META_PHONE_NUMBER_ID or not phone:
+            logger.error("Meta WhatsApp no está configurado completamente en el VPS.")
+            return False
+        url = f"https://graph.facebook.com/{META_GRAPH_VERSION}/{META_PHONE_NUMBER_ID}/messages"
+        headers = {
+            "Authorization": f"Bearer {META_ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": phone,
+            "type": "text",
+            "text": {"preview_url": True, "body": texto},
+        }
+    else:
+        url = f"{EVO_API_URL}/message/sendText/{INSTANCE_NAME}"
+        headers = {"apikey": EVO_API_KEY}
+        payload = {"number": numero, "text": texto, "delay": 500, "linkPreview": True}
+
     async with httpx.AsyncClient(timeout=15.0) as client:
         try:
-            await client.post(url, json=payload, headers=headers)
+            response = await client.post(url, json=payload, headers=headers)
+            if response.status_code < 200 or response.status_code >= 300:
+                logger.error("Error enviando WhatsApp por %s: HTTP %s", WHATSAPP_PROVIDER, response.status_code)
+                return False
+            return True
         except Exception as exc:
-            logger.error("Error enviando mensaje WhatsApp: %s", exc)
+            logger.error("Error enviando WhatsApp por %s: %s", WHATSAPP_PROVIDER, exc)
+            return False
+
+
+async def process_user_message(numero_cliente, mensaje):
+    state_key = normalize_phone(numero_cliente) or str(numero_cliente)
+    mensaje = str(mensaje or "").strip().lower()
+    if not mensaje:
+        return
+
+    state = user_states.get(state_key, "START")
+
+    if any(word in mensaje for word in ["hola", "buenas", "inicio", "menu", "volver"]):
+        user_states[state_key] = "START"
+        await enviar_whatsapp(numero_cliente, MENU_BIENVENIDA)
+        return
+
+    if state == "START":
+        if mensaje == "1":
+            user_states[state_key] = "CLIENT"
+            await enviar_whatsapp(numero_cliente, MENU_CLIENTE)
+        elif mensaje == "2":
+            user_states[state_key] = "PROSPECT"
+            await enviar_whatsapp(numero_cliente, MENSAJE_PROSPECTO)
+        else:
+            await enviar_whatsapp(numero_cliente, "Escribe *'MENU'* para ver las opciones.")
+        return
+
+    if state == "CLIENT":
+        if mensaje == "1":
+            await enviar_whatsapp(numero_cliente, RESPUESTA_PAGO)
+        elif mensaje == "2":
+            await enviar_whatsapp(numero_cliente, await promise_response_for_phone(state_key))
+        elif mensaje == "3":
+            await enviar_whatsapp(numero_cliente, RESPUESTA_FACTURA)
+        elif mensaje == "4":
+            await enviar_whatsapp(numero_cliente, RESPUESTA_SOPORTE)
+        else:
+            await enviar_whatsapp(numero_cliente, "Opción no válida. Responde con el número (1-4) o escribe *'VOLVER'*.")
+        return
+
+    if state == "PROSPECT":
+        if "interesa" in mensaje:
+            await create_lead_with_contact(state_key)
+            await enviar_whatsapp(numero_cliente, "🚀 *¡Genial!* En breve un asesor te enviará los datos bancarios para coordinar tu instalación.")
+        else:
+            await enviar_whatsapp(numero_cliente, "Escribe *'VOLVER'* para regresar al menú principal.")
+
+
+def meta_text_from_message(message):
+    message_type = message.get("type")
+    if message_type == "text":
+        return (message.get("text") or {}).get("body", "")
+    if message_type == "button":
+        return (message.get("button") or {}).get("text", "")
+    if message_type == "interactive":
+        interactive = message.get("interactive") or {}
+        reply_type = interactive.get("type")
+        if reply_type == "button_reply":
+            reply = interactive.get("button_reply") or {}
+            return reply.get("title") or reply.get("id") or ""
+        if reply_type == "list_reply":
+            reply = interactive.get("list_reply") or {}
+            return reply.get("title") or reply.get("id") or ""
+    return ""
 
 
 @app.get("/webhook")
-async def health_check():
-    return {"status": "ok", "message": "Webhook receiver is active", "version": "2.0-promise-restrictions"}
+async def health_or_meta_verification(request: Request):
+    mode = request.query_params.get("hub.mode")
+    verify_token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+
+    if mode == "subscribe":
+        if not META_VERIFY_TOKEN:
+            return JSONResponse({"error": "META_VERIFY_TOKEN no configurado"}, status_code=503)
+        if hmac.compare_digest(verify_token or "", META_VERIFY_TOKEN):
+            logger.info("Webhook de Meta verificado correctamente.")
+            return PlainTextResponse(challenge or "")
+        return JSONResponse({"error": "Verify token inválido"}, status_code=403)
+
+    return {
+        "status": "ok",
+        "message": "Webhook receiver is active",
+        "version": "3.0-meta-cloud-api",
+        "provider": WHATSAPP_PROVIDER,
+    }
 
 
 @app.post("/webhook")
-async def recibir_mensaje(request: Request):
-    data = await request.json()
+async def recibir_mensaje(request: Request, background_tasks: BackgroundTasks):
+    raw_body = await request.body()
+    try:
+        data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JSONResponse({"error": "JSON inválido"}, status_code=400)
 
-    if data.get('event') == 'messages.upsert':
+    # Meta WhatsApp Business Platform / Cloud API
+    if data.get("object") == "whatsapp_business_account":
+        signature = request.headers.get("x-hub-signature-256", "")
+        if not verify_meta_signature(raw_body, signature):
+            logger.warning("Webhook de Meta rechazado por firma inválida.")
+            return JSONResponse({"error": "Firma inválida"}, status_code=403)
+
+        accepted = 0
+        for entry in data.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value") or {}
+                for message in value.get("messages") or []:
+                    message_id = message.get("id")
+                    if not mark_message_once(message_id):
+                        continue
+                    numero_cliente = message.get("from", "")
+                    mensaje = meta_text_from_message(message)
+                    if numero_cliente and mensaje:
+                        background_tasks.add_task(process_user_message, numero_cliente, mensaje)
+                        accepted += 1
+        return {"status": "accepted", "messages": accepted}
+
+    # Compatibilidad con el webhook anterior de Evolution API.
+    if data.get("event") == "messages.upsert":
         try:
-            msg_data = data['data']
-            if msg_data['key']['fromMe']:
+            msg_data = data["data"]
+            if msg_data["key"].get("fromMe"):
                 return {"status": "ignored"}
 
-            numero_cliente = msg_data['key']['remoteJid']
+            message_id = msg_data.get("key", {}).get("id")
+            if not mark_message_once(message_id):
+                return {"status": "duplicate"}
+
+            numero_cliente = msg_data["key"].get("remoteJid", "")
+            message = msg_data.get("message", {})
             mensaje = ""
-            message = msg_data.get('message', {})
+            if "conversation" in message:
+                mensaje = message["conversation"]
+            elif "extendedTextMessage" in message:
+                mensaje = message["extendedTextMessage"].get("text", "")
 
-            if 'conversation' in message:
-                mensaje = message['conversation']
-            elif 'extendedTextMessage' in message:
-                mensaje = message['extendedTextMessage'].get('text', '')
-
-            mensaje = mensaje.strip().lower()
-            state = user_states.get(numero_cliente, "START")
-
-            if any(word in mensaje for word in ["hola", "buenas", "inicio", "menu", "volver"]):
-                user_states[numero_cliente] = "START"
-                await enviar_whatsapp(numero_cliente, MENU_BIENVENIDA)
-
-            elif state == "START":
-                if mensaje == "1":
-                    user_states[numero_cliente] = "CLIENT"
-                    await enviar_whatsapp(numero_cliente, MENU_CLIENTE)
-                elif mensaje == "2":
-                    user_states[numero_cliente] = "PROSPECT"
-                    await enviar_whatsapp(numero_cliente, MENSAJE_PROSPECTO)
-                else:
-                    await enviar_whatsapp(numero_cliente, "Escribe *'MENU'* para ver las opciones.")
-
-            elif state == "CLIENT":
-                if mensaje == "1":
-                    await enviar_whatsapp(numero_cliente, RESPUESTA_PAGO)
-                elif mensaje == "2":
-                    phone_clean = numero_cliente.split('@')[0]
-                    await enviar_whatsapp(numero_cliente, await promise_response_for_phone(phone_clean))
-                elif mensaje == "3":
-                    await enviar_whatsapp(numero_cliente, RESPUESTA_FACTURA)
-                elif mensaje == "4":
-                    await enviar_whatsapp(numero_cliente, RESPUESTA_SOPORTE)
-                else:
-                    await enviar_whatsapp(numero_cliente, "Opción no válida. Responde con el número (1-4) o escribe *'VOLVER'*.")
-
-            elif state == "PROSPECT":
-                if "interesa" in mensaje:
-                    phone_clean = numero_cliente.split('@')[0]
-                    await create_lead_with_contact(phone_clean)
-                    await enviar_whatsapp(numero_cliente, "🚀 *¡Genial!* En breve un asesor te enviará los datos bancarios para coordinar tu instalación.")
-                else:
-                    await enviar_whatsapp(numero_cliente, "Escribe *'VOLVER'* para regresar al menú principal.")
-
+            if numero_cliente and mensaje:
+                background_tasks.add_task(process_user_message, numero_cliente, mensaje)
         except Exception as exc:
-            logger.exception("Error procesando mensaje: %s", exc)
+            logger.exception("Error procesando mensaje de Evolution: %s", exc)
 
     return {"status": "processed"}
