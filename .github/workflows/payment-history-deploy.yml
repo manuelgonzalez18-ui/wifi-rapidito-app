@@ -5,6 +5,7 @@ on:
     branches: [reconstruccion-bot-10-opciones]
     paths:
       - 'public/proxy_payments.php'
+      - 'public/proxy_invoices.php'
       - 'public/payment_registry_lib.php'
       - 'public/payment_history.php'
       - 'src/pages/Admin/PaymentHistory.jsx'
@@ -15,6 +16,7 @@ on:
     branches: [main]
     paths:
       - 'public/proxy_payments.php'
+      - 'public/proxy_invoices.php'
       - 'public/payment_registry_lib.php'
       - 'public/payment_history.php'
       - 'src/pages/Admin/PaymentHistory.jsx'
@@ -47,13 +49,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate payment backend
+      - name: Validate payment and invoice backend
         shell: bash
         run: |
           set -euo pipefail
           php -l public/payment_registry_lib.php
           php -l public/payment_history.php
           php -l public/proxy_payments.php
+          php -l public/proxy_invoices.php
           php -r '$_SERVER["SCRIPT_FILENAME"]=""; require "public/payment_registry_lib.php"; if (payment_registry_reference_key("001234567890") !== "567890") exit(1); if (payment_registry_reference_key("567890") !== "567890") exit(2); echo "Reference normalization OK\n";'
 
       - name: Validate frontend
@@ -77,7 +80,11 @@ jobs:
           printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
           chmod 600 ~/.ssh/hostinger_deploy
           ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
-          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+          for i in 1 2 3; do
+            ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && break
+            sleep 2
+          done
+          test -s ~/.ssh/known_hosts
 
       - name: Backup portal and deploy payment feature
         if: github.event_name == 'push'
@@ -90,13 +97,13 @@ jobs:
           REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
           stamp="$(date +%Y%m%d-%H%M%S)"
 
-          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<REMOTE
+          ssh -o ConnectTimeout=15 -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<REMOTE
           set -euo pipefail
           BASE="$REMOTE_BASE"
           mkdir -p "\$BASE/.portal-backups" "\$BASE/.frontend-backups" "\$BASE/assets"
           cd "\$BASE"
           files=()
-          for file in proxy_payments.php payment_registry_lib.php payment_history.php; do
+          for file in proxy_payments.php proxy_invoices.php payment_registry_lib.php payment_history.php; do
             [[ -f "\$file" ]] && files+=("\$file")
           done
           if (( \${#files[@]} > 0 )); then
@@ -112,43 +119,52 @@ jobs:
           find "\$BASE/.frontend-backups" -type f -name 'payment-frontend-*.tar.gz' -mtime +14 -delete || true
           REMOTE
 
-          for file in payment_registry_lib.php payment_history.php proxy_payments.php; do
-            scp -i ~/.ssh/hostinger_deploy -P 65002 \
+          for file in payment_registry_lib.php payment_history.php proxy_payments.php proxy_invoices.php; do
+            scp -o ConnectTimeout=15 -i ~/.ssh/hostinger_deploy -P 65002 \
               "public/$file" \
               "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/$file.next"
-            ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            ssh -o ConnectTimeout=15 -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
               "php -l '$REMOTE_BASE/$file.next' >/dev/null && mv '$REMOTE_BASE/$file.next' '$REMOTE_BASE/$file'"
           done
 
-          scp -i ~/.ssh/hostinger_deploy -P 65002 -r \
+          scp -o ConnectTimeout=15 -i ~/.ssh/hostinger_deploy -P 65002 -r \
             dist/assets/. \
             "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/assets/"
-          scp -i ~/.ssh/hostinger_deploy -P 65002 \
+          scp -o ConnectTimeout=15 -i ~/.ssh/hostinger_deploy -P 65002 \
             dist/index.html \
             "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/index.html.next"
-          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+          ssh -o ConnectTimeout=15 -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
             "mv '$REMOTE_BASE/index.html.next' '$REMOTE_BASE/index.html'"
-          printf '%s\n' "$GITHUB_SHA" | ssh -i ~/.ssh/hostinger_deploy -p 65002 \
+          printf '%s\n' "$GITHUB_SHA" | ssh -o ConnectTimeout=15 -i ~/.ssh/hostinger_deploy -p 65002 \
             "$HOSTINGER_USER@$HOSTINGER_HOST" "cat > '$REMOTE_BASE/payment-feature-version.txt'"
 
-      - name: Verify public payment feature
+      - name: Verify public payment and invoice feature
         if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
           for attempt in {1..12}; do
             PROXY="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/proxy_payments.php?health=$GITHUB_SHA" 2>/dev/null || true)"
+            INVOICE_HEALTH="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/proxy_invoices.php?health=$GITHUB_SHA" 2>/dev/null || true)"
+            INVOICE_412="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/proxy_invoices.php?id_servicio=412&nocache=$GITHUB_SHA" 2>/dev/null || true)"
             HISTORY="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/payment_history.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             VERSION="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/payment-feature-version.txt?sha=$GITHUB_SHA" 2>/dev/null || true)"
-            if grep -q '4.0-payment-registry' <<<"$PROXY" \
+
+            if grep -q '4.1-wisphub-register-fix' <<<"$PROXY" \
+              && grep -q '4.0-wisphub-saldo' <<<"$INVOICE_HEALTH" \
+              && grep -q '"id_factura":8990' <<<"$INVOICE_412" \
+              && grep -q '"total":25' <<<"$INVOICE_412" \
               && grep -q '1.0-payment-history' <<<"$HISTORY" \
               && [[ "$VERSION" == "$GITHUB_SHA" ]]; then
-              echo 'Payment history feature deployed and verified.'
+              echo 'Payment and WispHub invoice features deployed and verified.'
               exit 0
             fi
             sleep 5
           done
-          echo 'Payment history public verification failed.'
+          echo 'Public payment/invoice verification failed.'
+          echo "proxy=$PROXY"
+          echo "invoice_health=$INVOICE_HEALTH"
+          echo "invoice_412=$INVOICE_412"
           exit 1
 
       - name: Publish deployment status
@@ -163,5 +179,5 @@ jobs:
               sha: context.sha,
               state: 'success',
               context: 'Payment History Deploy',
-              description: 'Payment history and duplicate-reference protection deployed',
+              description: 'Payments and WispHub invoices deployed',
             });
