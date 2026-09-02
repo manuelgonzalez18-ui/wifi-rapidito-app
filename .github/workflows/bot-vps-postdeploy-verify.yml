@@ -1,0 +1,89 @@
+name: Bot VPS Postdeploy Verify
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-vps-postdeploy-verify.yml'
+      - 'vps/POSTDEPLOY_VERIFY_TRIGGER'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+    steps:
+      - name: Configure verified SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+
+      - name: Verify production and rollback state
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          echo "HOST=$(hostname)"
+          echo "BOT_IMAGE=$(docker inspect -f '{{.Config.Image}}' bot_backend)"
+          echo "BOT_RUNNING=$(docker inspect -f '{{.State.Running}}' bot_backend)"
+          echo "BOT_RESTART=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' bot_backend)"
+          echo '--- HEALTH ---'
+          health=$(curl -fsS http://127.0.0.1:5000/webhook)
+          echo "$health"
+          printf '%s' "$health" | grep -q '4.0-bot-10-opciones'
+          printf '%s' "$health" | grep -q '"provider":"meta"'
+
+          echo '--- DEPENDENCIES ---'
+          for c in evolution_api redis_bot; do
+            running=$(docker inspect -f '{{.State.Running}}' "$c")
+            echo "$c=$running"
+            test "$running" = true
+          done
+
+          echo '--- ROLLBACK CONTAINER ---'
+          test -s /root/rapidito-rollback-container
+          old=$(cat /root/rapidito-rollback-container)
+          echo "ROLLBACK_NAME=$old"
+          docker inspect "$old" >/dev/null
+          echo "ROLLBACK_IMAGE=$(docker inspect -f '{{.Config.Image}}' "$old")"
+          echo "ROLLBACK_RUNNING=$(docker inspect -f '{{.State.Running}}' "$old")"
+
+          echo '--- RECENT BOT LOG SIGNALS ---'
+          docker logs --since 3m bot_backend 2>&1 | grep -E 'Application startup complete|Uvicorn running|ERROR|Traceback|Exception' | tail -30 || true
+
+          echo '--- META GRAPH READ-ONLY ---'
+          envdump=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend)
+          token=$(printf '%s\n' "$envdump" | sed -n 's/^META_ACCESS_TOKEN=//p' | head -1)
+          phone_id=$(printf '%s\n' "$envdump" | sed -n 's/^META_PHONE_NUMBER_ID=//p' | head -1)
+          graph_ver=$(printf '%s\n' "$envdump" | sed -n 's/^META_GRAPH_VERSION=//p' | head -1)
+          graph_ver=${graph_ver:-v23.0}
+          if [[ -n "$token" && -n "$phone_id" ]]; then
+            code=$(curl -sS --max-time 10 -o /tmp/meta-phone.json -w '%{http_code}' \
+              -H "Authorization: Bearer $token" \
+              "https://graph.facebook.com/$graph_ver/$phone_id?fields=id,verified_name,display_phone_number" || true)
+            echo "META_GRAPH_HTTP=$code"
+            test "$code" = 200
+          else
+            echo 'META_GRAPH_ENV_MISSING=1'
+            exit 41
+          fi
+
+          echo 'POSTDEPLOY_VERIFY_OK=1'
+          REMOTE
