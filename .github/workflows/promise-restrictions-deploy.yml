@@ -11,10 +11,12 @@ on:
       - 'vps/requirements-bot.txt'
       - 'vps/bot_logic.py'
       - 'vps/bot_entry.py'
+      - 'vps/bot_presentation.py'
       - 'vps/bot_flows.py'
       - 'vps/test_bot_flows.py'
       - 'vps/test_bot_conversation.py'
       - 'vps/test_bot_integrations.py'
+      - 'vps/test_bot_presentation.py'
       - 'vps/validate_bot_env.py'
       - 'vps/set_webhook.py'
       - 'vps/get_qr.py'
@@ -31,10 +33,12 @@ on:
       - 'vps/requirements-bot.txt'
       - 'vps/bot_logic.py'
       - 'vps/bot_entry.py'
+      - 'vps/bot_presentation.py'
       - 'vps/bot_flows.py'
       - 'vps/test_bot_flows.py'
       - 'vps/test_bot_conversation.py'
       - 'vps/test_bot_integrations.py'
+      - 'vps/test_bot_presentation.py'
       - 'vps/validate_bot_env.py'
       - 'vps/set_webhook.py'
       - 'vps/get_qr.py'
@@ -66,16 +70,18 @@ jobs:
             vps/bot_flows.py \
             vps/bot_logic.py \
             vps/bot_entry.py \
+            vps/bot_presentation.py \
             vps/validate_bot_env.py \
             vps/set_webhook.py \
             vps/get_qr.py \
             vps/test_bot_flows.py \
             vps/test_bot_conversation.py \
-            vps/test_bot_integrations.py
+            vps/test_bot_integrations.py \
+            vps/test_bot_presentation.py
           bash -n vps/reset_whatsapp.sh
           bash -n vps/deploy_bot_local.sh
           cd vps
-          python -m unittest test_bot_flows.py test_bot_conversation.py test_bot_integrations.py
+          python -m unittest test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py
 
       - name: Configure Hostinger SSH
         if: github.event_name == 'push'
