@@ -1,3 +1,4 @@
+# Read-only check after bank verification
 name: Payment Registration Readonly
 
 on:
@@ -61,7 +62,6 @@ jobs:
               ],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n";
             }
           ' "$STORE"
-
           echo '=== WispHub invoice 9604 after attempt ==='
           cat > /tmp/check_invoice.php <<'PHP'
           <?php
