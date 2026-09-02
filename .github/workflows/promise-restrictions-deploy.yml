@@ -10,6 +10,10 @@ on:
       - 'vps/bot_logic.py'
       - 'vps/bot_flows.py'
       - 'vps/test_bot_flows.py'
+      - 'vps/validate_bot_env.py'
+      - 'vps/set_webhook.py'
+      - 'vps/get_qr.py'
+      - 'vps/reset_whatsapp.sh'
       - '.github/workflows/promise-restrictions-deploy.yml'
   pull_request:
     branches: [main]
@@ -20,6 +24,10 @@ on:
       - 'vps/bot_logic.py'
       - 'vps/bot_flows.py'
       - 'vps/test_bot_flows.py'
+      - 'vps/validate_bot_env.py'
+      - 'vps/set_webhook.py'
+      - 'vps/get_qr.py'
+      - 'vps/reset_whatsapp.sh'
       - '.github/workflows/promise-restrictions-deploy.yml'
 
 permissions:
@@ -39,7 +47,13 @@ jobs:
           php -l public/promise_restrictions_lib.php
           php -l public/promise_restrictions.php
           php -l public/proxy_promises.php
-          python -m py_compile vps/bot_flows.py vps/bot_logic.py
+          python -m py_compile \
+            vps/bot_flows.py \
+            vps/bot_logic.py \
+            vps/validate_bot_env.py \
+            vps/set_webhook.py \
+            vps/get_qr.py
+          bash -n vps/reset_whatsapp.sh
           cd vps
           python -m unittest test_bot_flows.py
 
