@@ -1,3 +1,4 @@
+# Read-only production diagnostic
 name: Balance and Banesco Logic Readonly
 
 on:
@@ -62,7 +63,6 @@ jobs:
               echo 'saldo_factura_'.$i.'='.json_encode(['id'=>$f['id']??$f['id_factura']??'','total'=>$f['total']??'','fecha_emision'=>$f['fecha_emision']??'','fecha_vencimiento'=>$f['fecha_vencimiento']??''],JSON_UNESCAPED_SLASHES)."\n";
             }
           }
-
           echo "=== Client 412 exact invoice filter ===\n";
           [$cc,$ce,$client]=getw('clientes/412/');
           if($cc===200 && is_array($client)){
@@ -77,7 +77,6 @@ jobs:
               }
             }
           } else echo "client_412_detail_http=$cc\n";
-
           echo "=== Active Banesco decision logic ===\n";
           require $base.'/banesco_api.php';
           $r=new ReflectionClass('BanescoAPI');$m=$r->getMethod('checkTransaction');
