@@ -1,0 +1,13 @@
+{
+  "timeZone": "America/Caracas",
+  "dependencies": {},
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "oauthScopes": [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/script.scriptapp"
+  ]
+}
