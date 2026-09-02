@@ -30,43 +30,6 @@ jobs:
           chmod 600 ~/.ssh/hostinger_deploy
           ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
 
-      - name: Restore leftovers from previous failed preflight
-        env:
-          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          candidates=("193.203.188.215")
-          if [[ -n "${HOSTINGER_HOST:-}" && "$HOSTINGER_HOST" != "193.203.188.215" ]]; then candidates+=("$HOSTINGER_HOST"); fi
-          for host in "${candidates[@]}"; do
-            for port in 22 65002; do
-              SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-              if timeout 8 "${SSH[@]}" "$HOSTINGER_USER@$host" 'true' >/dev/null 2>&1; then
-                "${SSH[@]}" "$HOSTINGER_USER@$host" 'bash -s' <<'REMOTE' || true
-                set -euo pipefail
-                old_sha='1ac80237fd0e0dcf054b906983a74fa5f739ab60'
-                for base in "$HOME" /opt /srv; do
-                  [[ -d "$base" ]] || continue
-                  find "$base" -maxdepth 8 -type d -path "*/.bot-backups/preflight-$old_sha" -print 2>/dev/null
-                done | while IFS= read -r backup_dir; do
-                  bot_dir="$(dirname "$(dirname "$backup_dir")")"
-                  files=(bot_logic.py bot_entry.py bot_presentation.py bot_flows.py test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py validate_bot_env.py deploy_bot_local.sh reset_whatsapp.sh set_webhook.py get_qr.py requirements-bot.txt Dockerfile.bot)
-                  for file in "${files[@]}"; do
-                    if [[ -f "$backup_dir/$file" ]]; then
-                      cp -a "$backup_dir/$file" "$bot_dir/$file"
-                    else
-                      rm -f "$bot_dir/$file"
-                    fi
-                  done
-                  rm -rf "$bot_dir/.live-preflight-$old_sha"
-                  echo 'PREVIOUS_PREFLIGHT_RESTORED=1'
-                done
-                REMOTE
-              fi
-            done
-          done
-
       - name: Locate Docker bot server
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
