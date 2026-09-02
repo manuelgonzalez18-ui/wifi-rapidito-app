@@ -1,0 +1,70 @@
+name: Bot Evolution Report Channel Check
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-evolution-report-channel-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+    steps:
+      - name: Configure verified SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+
+      - name: Check Evolution connection without exposing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          envdump=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend)
+          api_key=$(printf '%s\n' "$envdump" | sed -n 's/^EVO_API_KEY=//p' | head -1)
+          test -n "$api_key"
+
+          code=$(curl -sS --max-time 10 -o /tmp/evo-instances.json -w '%{http_code}' \
+            -H "apikey: $api_key" http://127.0.0.1:8080/instance/fetchInstances || true)
+          echo "EVOLUTION_FETCH_HTTP=$code"
+          test "$code" = 200
+
+          python3 - <<'PY'
+          import json
+          with open('/tmp/evo-instances.json', 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          if isinstance(data, dict):
+              candidates = data.get('instances') or data.get('data') or [data]
+          else:
+              candidates = data
+          if not isinstance(candidates, list):
+              candidates = []
+          print('EVOLUTION_INSTANCE_COUNT=' + str(len(candidates)))
+          for item in candidates:
+              if not isinstance(item, dict):
+                  continue
+              instance = item.get('instance') if isinstance(item.get('instance'), dict) else item
+              name = instance.get('instanceName') or instance.get('name') or item.get('name') or ''
+              state = instance.get('connectionStatus') or instance.get('state') or item.get('connectionStatus') or item.get('state') or ''
+              print(f'INSTANCE={name} STATE={state}')
+          PY
+          REMOTE
