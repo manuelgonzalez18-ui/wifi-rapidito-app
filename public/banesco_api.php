@@ -20,23 +20,16 @@ define('BANESCO_SSO_QA', 'https://sso-sso-project.apps.desplakur3.desintra.banes
 define('BANESCO_API_QA', 'https://sid-validador-consulta-de-transacciones-api-qa-production.apps.desplakur3.desintra.banesco.com');
 define('BANESCO_CLIENT_ID', $banescoClientId);
 define('BANESCO_CLIENT_SECRET', $banescoClientSecret);
-
 define('BANESCO_TOKEN_CACHE', sys_get_temp_dir() . '/banesco_token.json');
 
 class BanescoAPI {
     private static function getToken() {
         if (file_exists(BANESCO_TOKEN_CACHE)) {
             $data = json_decode(file_get_contents(BANESCO_TOKEN_CACHE), true);
-            if (isset($data['access_token']) && $data['expires_at'] > time()) {
-                return $data['access_token'];
-            }
+            if (isset($data['access_token']) && $data['expires_at'] > time()) return $data['access_token'];
         }
         $ch = curl_init(BANESCO_SSO_QA);
-        $postData = http_build_query([
-            'grant_type' => 'client_credentials',
-            'client_id' => BANESCO_CLIENT_ID,
-            'client_secret' => BANESCO_CLIENT_SECRET
-        ]);
+        $postData = http_build_query(['grant_type'=>'client_credentials','client_id'=>BANESCO_CLIENT_ID,'client_secret'=>BANESCO_CLIENT_SECRET]);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
