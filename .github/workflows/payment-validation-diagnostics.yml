@@ -1,0 +1,95 @@
+name: Payment Validation Diagnostics
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/payment-validation-diagnostics.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Inspect deployed Banesco adapter safely
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          FILE="$BASE/banesco_api.php"
+
+          echo '=== Current deployed adapter ==='
+          test -s "$FILE"
+          sha256sum "$FILE" | awk '{print "sha256=" $1}'
+          if grep -q 'realm-api-qa' "$FILE"; then echo 'environment=QA'; else echo 'environment=NOT_QA'; fi
+          for field in referenceNumber accountId amount startDt phoneNum bankId endDt; do
+            if grep -q "$field" "$FILE"; then echo "$field=yes"; else echo "$field=no"; fi
+          done
+          if grep -q "paymentId" "$FILE"; then echo 'legacy_paymentId=yes'; else echo 'legacy_paymentId=no'; fi
+          if grep -q "BANESCO_CLIENT_SECRET" "$FILE"; then echo 'embedded_credentials=yes'; else echo 'embedded_credentials=no'; fi
+
+          echo '=== Other plain PHP copies ==='
+          find "$HOME/domains/wifirapidito.com" -type f \( -name 'banesco_api.php' -o -name 'banesco_api*.php' \) 2>/dev/null | head -40 | while read -r candidate; do
+            printf 'copy=%s ' "$candidate"
+            if grep -q 'realm-api-qa' "$candidate"; then printf 'env=QA '; else printf 'env=NOT_QA '; fi
+            score=0
+            for field in referenceNumber accountId amount startDt phoneNum bankId; do
+              grep -q "$field" "$candidate" && score=$((score+1)) || true
+            done
+            echo "certified_fields=$score/6"
+          done
+
+          echo '=== Recent archives containing banesco_api.php ==='
+          count=0
+          while IFS= read -r archive; do
+            if tar -tzf "$archive" 2>/dev/null | grep -q 'banesco_api.php'; then
+              echo "archive=$archive"
+              tmp="$(mktemp -d)"
+              tar -xzf "$archive" -C "$tmp" --wildcards --no-anchored 'banesco_api.php' 2>/dev/null || true
+              while IFS= read -r candidate; do
+                printf '  recovered=' 
+                if grep -q 'realm-api-qa' "$candidate"; then printf 'env=QA '; else printf 'env=NOT_QA '; fi
+                score=0
+                for field in referenceNumber accountId amount startDt phoneNum bankId; do
+                  grep -q "$field" "$candidate" && score=$((score+1)) || true
+                done
+                echo "certified_fields=$score/6 sha256=$(sha256sum "$candidate" | awk '{print $1}')"
+              done < <(find "$tmp" -type f -name 'banesco_api.php' 2>/dev/null)
+              rm -rf "$tmp"
+              count=$((count+1))
+              [ "$count" -ge 20 ] && break
+            fi
+          done < <(find "$HOME/domains/wifirapidito.com" -type f \( -name '*.tar.gz' -o -name '*.tgz' \) -mtime -365 2>/dev/null | sort -r | head -120)
+
+          echo '=== Recent payment endpoint access ==='
+          for log in "$HOME/domains/wifirapidito.com/logs"/* "$BASE/error_log"; do
+            [ -f "$log" ] || continue
+            echo "log=$(basename "$log")"
+            tail -n 2500 "$log" 2>/dev/null | grep 'proxy_payments.php' | tail -20 | sed -E 's/(proxy_payments\.php)\?[^ ]*/\1?…/g' || true
+          done
+          REMOTE
