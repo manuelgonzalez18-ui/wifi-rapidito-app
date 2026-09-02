@@ -30,6 +30,7 @@ class BotPresentationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(bot.handle_debt, presentation.handle_debt)
         self.assertIs(bot.start_payment, presentation.start_payment)
         self.assertIs(bot.handle_payment_flow, presentation.handle_payment_flow)
+        self.assertIs(bot.show_service_status, presentation.show_service_status)
         self.assertIsNotNone(presentation.app)
 
     async def test_identificacion_historica_pide_usuario_y_muestra_cuenta(self):
@@ -131,6 +132,42 @@ class BotPresentationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Referencia: *833634*", text)
         self.assertIn("punto (.)", text)
         self.assertIn("👉 19498.81", text)
+
+    async def test_monto_pago_pide_fecha_en_formato_historico(self):
+        state = bot.state_for(PHONE)
+        state["mode"] = "PAYMENT_AMOUNT"
+        state["identity"] = dict(IDENTITY)
+        state["data"] = {}
+        send = AsyncMock(return_value=True)
+
+        with patch.object(bot, "enviar_whatsapp", send):
+            await presentation.handle_payment_flow(PHONE, state, "19450.00")
+
+        self.assertEqual(state["mode"], "PAYMENT_DATE")
+        self.assertEqual(state["data"]["amount"], Decimal("19450.00"))
+        text = send.await_args.args[1]
+        self.assertIn("Fecha del pago (DD/MM/AAAA)", text)
+        self.assertIn("22/08/2026", text)
+        self.assertNotIn("AAAA-MM-DD", text)
+
+    async def test_estado_servicio_refresca_wisphub_y_solo_muestra_estado(self):
+        state = bot.state_for(PHONE)
+        state["mode"] = "CLIENT_MENU"
+        state["identity"] = dict(IDENTITY)
+        refreshed = {**IDENTITY, "status": "Suspendido"}
+        send = AsyncMock(return_value=True)
+        lookup = AsyncMock(return_value=refreshed)
+
+        with patch.object(entry, "find_client_by_username", lookup), \
+             patch.object(bot, "enviar_whatsapp", send):
+            await presentation.show_service_status(PHONE, state)
+
+        lookup.assert_awaited_once_with("clienteprueba")
+        self.assertEqual(state["identity"]["status"], "Suspendido")
+        text = send.await_args.args[1]
+        self.assertIn("Suspendido", text)
+        self.assertNotIn("Servicio: 579", text)
+        self.assertNotIn("Cliente Prueba", text)
 
 
 if __name__ == "__main__":
