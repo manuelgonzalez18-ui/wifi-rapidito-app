@@ -2,8 +2,9 @@ import unittest
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
-import bot_logic as bot
+import bot_entry as entry
 
+bot = entry.bot
 
 PHONE = "584241234567"
 IDENTITY = {
@@ -26,17 +27,34 @@ class BotConversationTests(unittest.IsolatedAsyncioTestCase):
         bot.user_states.clear()
         bot._processed_message_ids.clear()
 
-    async def test_menu_cliente_muestra_diez_opciones(self):
+    async def test_cliente_nuevo_en_conversacion_pide_usuario(self):
         send = AsyncMock(return_value=True)
-        with patch.object(bot, "find_client_by_whatsapp_phone", AsyncMock(return_value=IDENTITY)), \
-             patch.object(bot, "enviar_whatsapp", send):
+        with patch.object(bot, "enviar_whatsapp", send):
             await bot.process_user_message(PHONE, "hola")
+            await bot.process_user_message(PHONE, "1")
 
-        text = send.await_args.args[1]
-        self.assertIn("1. 💰 ¿Cuánto debo?", text)
-        self.assertIn("7. ⚠️ Falla Masiva en mi Comunidad", text)
-        self.assertIn("10. 💜 Promesa de Pago", text)
-        self.assertEqual(bot.state_for(PHONE)["mode"], "CLIENT_MENU")
+        state = bot.state_for(PHONE)
+        self.assertEqual(state["mode"], "CLIENT_USERNAME")
+        self.assertIn("usuario asignado", send.await_args.args[1])
+
+    async def test_usuario_encontrado_muestra_estado_y_menu_diez_opciones(self):
+        send = AsyncMock(return_value=True)
+        lookup = AsyncMock(return_value=dict(IDENTITY))
+        state = bot.state_for(PHONE)
+        state["mode"] = "CLIENT_USERNAME"
+
+        with patch.object(entry, "find_client_by_username", lookup), \
+             patch.object(bot, "enviar_whatsapp", send):
+            await bot.process_user_message(PHONE, "clienteprueba")
+
+        self.assertEqual(state["mode"], "CLIENT_MENU")
+        self.assertEqual(state["identity"]["username"], "clienteprueba")
+        texts = [call.args[1] for call in send.await_args_list]
+        self.assertTrue(any("¡Te encontré!" in text for text in texts))
+        menu = texts[-1]
+        self.assertIn("1. 💰 ¿Cuánto debo?", menu)
+        self.assertIn("7. ⚠️ Falla Masiva en mi Comunidad", menu)
+        self.assertIn("10. 💜 Promesa de Pago", menu)
 
     async def test_sin_internet_inicia_solicitando_mac(self):
         state = bot.state_for(PHONE)
@@ -98,14 +116,11 @@ class BotConversationTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot, "enviar_whatsapp", send):
             await bot.process_user_message(PHONE, "8")
             self.assertEqual(state["mode"], "PASSWORD_MAC")
-
             await bot.process_user_message(PHONE, "4CD7C86AF250")
             self.assertEqual(state["data"]["mac"], "4C:D7:C8:6A:F2:50")
             self.assertEqual(state["mode"], "PASSWORD_COMMUNITY")
-
             await bot.process_user_message(PHONE, "Prado Largo")
             self.assertEqual(state["mode"], "PASSWORD_NEW")
-
             await bot.process_user_message(PHONE, "Clave.2026$")
             self.assertEqual(state["mode"], "PASSWORD_CONFIRM")
             self.assertIn("Confirma tu solicitud", send.await_args.args[1])
@@ -134,21 +149,22 @@ class BotConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("#1455" in call.args[1] for call in send.await_args_list))
         self.assertEqual(state["mode"], "CLIENT_MENU")
 
-    async def test_estado_servicio_no_crea_ticket(self):
+    async def test_estado_servicio_solo_muestra_estado_y_no_crea_ticket(self):
         state = bot.state_for(PHONE)
         state["mode"] = "CLIENT_MENU"
         state["identity"] = {**IDENTITY, "status": "Suspendido"}
         send = AsyncMock(return_value=True)
-        lookup = AsyncMock(return_value={**IDENTITY, "status": "Suspendido"})
         create_ticket = AsyncMock()
 
-        with patch.object(bot, "find_client_by_whatsapp_phone", lookup), \
-             patch.object(bot, "enviar_whatsapp", send), \
+        with patch.object(bot, "enviar_whatsapp", send), \
              patch.object(bot, "create_support_ticket", create_ticket):
             await bot.process_user_message(PHONE, "9")
 
         create_ticket.assert_not_awaited()
-        self.assertIn("Suspendido", send.await_args.args[1])
+        text = send.await_args.args[1]
+        self.assertIn("Suspendido", text)
+        self.assertNotIn("Servicio: 579", text)
+        self.assertNotIn("Cliente Prueba", text)
 
     async def test_pago_sin_facturas_no_abre_captura(self):
         state = bot.state_for(PHONE)
@@ -163,6 +179,31 @@ class BotConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["mode"], "CLIENT_MENU")
         self.assertIn("No tienes facturas pendientes", send.await_args.args[1])
 
+    async def test_pago_confirma_referencia_enmascarada_y_fecha_espanol(self):
+        state = bot.state_for(PHONE)
+        state["mode"] = "PAYMENT_DATE"
+        state["identity"] = dict(IDENTITY)
+        state["data"] = {
+            "invoice": fake_invoice(),
+            "method": "2",
+            "method_label": "Pago Móvil Otros Bancos → Banesco",
+            "origin_bank_code": "0102",
+            "origin_bank_name": "Banco de Venezuela",
+            "sender_phone": "04241382174",
+            "reference": "833634",
+            "amount": Decimal("19450.00"),
+        }
+        send = AsyncMock(return_value=True)
+
+        with patch.object(bot, "enviar_whatsapp", send):
+            await bot.process_user_message(PHONE, "22/08/2026")
+
+        text = send.await_args.args[1]
+        self.assertIn("****3634", text)
+        self.assertIn("0102 - Banco de Venezuela", text)
+        self.assertIn("22/08/2026", text)
+        self.assertIn("Bs. 19.450,00", text)
+
     async def test_pago_no_verificado_va_a_revision_manual(self):
         state = bot.state_for(PHONE)
         state["mode"] = "PAYMENT_CONFIRM"
@@ -173,7 +214,7 @@ class BotConversationTests(unittest.IsolatedAsyncioTestCase):
             "method_label": "Pago Móvil Otros Bancos → Banesco",
             "origin_bank_code": "0102",
             "origin_bank_name": "Banco de Venezuela",
-            "sender_phone": "584241382174",
+            "sender_phone": "04241382174",
             "reference": "833634",
             "amount": Decimal("19450.00"),
             "payment_date": "2026-08-22",
@@ -193,6 +234,24 @@ class BotConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("833634", report)
         self.assertTrue(any("revisión manual" in call.args[1] for call in send.await_args_list))
         self.assertEqual(state["mode"], "CLIENT_MENU")
+
+    async def test_promesa_muestra_monto_accion_y_fecha_ddmmyyyy(self):
+        state = bot.state_for(PHONE)
+        state["mode"] = "CLIENT_MENU"
+        state["identity"] = dict(IDENTITY)
+        send = AsyncMock(return_value=True)
+        window = {"today": __import__("datetime").date(2026, 9, 2), "is_open": True, "max": __import__("datetime").date(2026, 9, 5), "next_open": None}
+
+        with patch.object(bot, "get_promise_restriction", AsyncMock(return_value=None)), \
+             patch.object(bot, "promise_window", return_value=window), \
+             patch.object(bot, "load_pending_invoices", AsyncMock(return_value=[fake_invoice()])), \
+             patch.object(bot, "enviar_whatsapp", send):
+            await bot.process_user_message(PHONE, "10")
+
+        text = send.await_args.args[1]
+        self.assertIn("Monto: $25", text)
+        self.assertIn("Registrar y activar servicio", text)
+        self.assertIn("05/09/2026", text)
 
     async def test_promesa_cancelada_no_registra_en_wisphub(self):
         state = bot.state_for(PHONE)
