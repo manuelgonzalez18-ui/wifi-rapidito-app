@@ -43,46 +43,60 @@ jobs:
           test -s "$FILE"
           test -s "$PROXY"
 
-          echo '=== Runtime-selected configuration ==='
-          php -r '
-            require $argv[1];
-            foreach (["BANESCO_ENV", "BANESCO_API_URL", "BANESCO_SSO_URL"] as $name) {
+          cat > /tmp/rapidito_inspect_banesco.php <<'PHP'
+          <?php
+          $file = $argv[1];
+          require $file;
+          echo "=== Runtime-selected configuration ===\n";
+          foreach (["BANESCO_ENV", "BANESCO_API_URL", "BANESCO_SSO_URL"] as $name) {
               if (!defined($name)) { echo $name . "=undefined\n"; continue; }
               $value = constant($name);
               if (str_ends_with($name, "_URL")) {
-                $host = parse_url((string)$value, PHP_URL_HOST) ?: "invalid";
-                echo $name . "_host=" . $host . "\n";
+                  echo $name . "_host=" . (parse_url((string)$value, PHP_URL_HOST) ?: "invalid") . "\n";
               } else {
-                echo $name . "=" . preg_replace("/[^a-zA-Z0-9_-]/", "", (string)$value) . "\n";
+                  echo $name . "=" . preg_replace('/[^a-zA-Z0-9_-]/', '', (string)$value) . "\n";
               }
-            }
-            foreach (["BANESCO_CLIENT_ID", "BANESCO_CLIENT_SECRET", "BANESCO_CLIENT_ID_PROD", "BANESCO_CLIENT_SECRET_PROD", "BANESCO_CLIENT_ID_QA", "BANESCO_CLIENT_SECRET_QA"] as $name) {
-              $set = defined($name) && strlen((string)constant($name)) > 0;
-              echo $name . "_configured=" . ($set ? "yes" : "no") . "\n";
-            }
-            if (class_exists("BanescoAPI")) {
-              $ref = new ReflectionClass("BanescoAPI");
-              $methods = [];
-              foreach ($ref->getMethods() as $method) $methods[] = $method->getName();
-              sort($methods);
-              echo "class_methods=" . implode(",", array_unique($methods)) . "\n";
-              if ($ref->hasMethod("checkTransaction")) {
-                $m = $ref->getMethod("checkTransaction");
-                echo "check_required_params=" . $m->getNumberOfRequiredParameters() . "\n";
-                echo "check_total_params=" . $m->getNumberOfParameters() . "\n";
-              }
-            }
-          ' "$FILE"
+          }
+          foreach (["BANESCO_CLIENT_ID", "BANESCO_CLIENT_SECRET", "BANESCO_CLIENT_ID_PROD", "BANESCO_CLIENT_SECRET_PROD"] as $name) {
+              echo $name . "_configured=" . ((defined($name) && strlen((string)constant($name)) > 0) ? "yes" : "no") . "\n";
+          }
 
-          echo '=== checkTransaction option contract ==='
-          php -r '
-            $src = file_get_contents($argv[1]);
-            preg_match_all("/\\$options\\s*\\[\\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]\\s*\\]/", $src, $m);
-            $keys = array_values(array_unique($m[1] ?? []));
-            sort($keys);
-            echo "option_keys=" . implode(",", $keys) . "\n";
-            echo "reads_post_directly=" . (strpos($src, "$_POST") !== false ? "yes" : "no") . "\n";
-          ' "$FILE"
+          $ref = new ReflectionClass('BanescoAPI');
+          $method = $ref->getMethod('checkTransaction');
+          echo "check_required_params=" . $method->getNumberOfRequiredParameters() . "\n";
+          echo "check_total_params=" . $method->getNumberOfParameters() . "\n";
+          echo "check_start_line=" . $method->getStartLine() . "\n";
+          echo "check_end_line=" . $method->getEndLine() . "\n";
+
+          $lines = file($file);
+          $body = implode('', array_slice($lines, $method->getStartLine() - 1, $method->getEndLine() - $method->getStartLine() + 1));
+
+          preg_match_all('/\$options\s*\[\s*[\'\"]([^\'\"]+)[\'\"]\s*\]/', $body, $m);
+          $optionKeys = array_values(array_unique($m[1] ?? []));
+          sort($optionKeys);
+          echo "option_keys=" . implode(',', $optionKeys) . "\n";
+
+          echo "=== Option access lines (literals redacted) ===\n";
+          foreach (preg_split('/\R/', $body) as $line) {
+              if (strpos($line, '$options') === false) continue;
+              $line = preg_replace('/([\'\"])(?:(?!\1).)*\1/', "'<redacted>'", $line);
+              $line = preg_replace('/\s+/', ' ', trim($line));
+              echo $line . "\n";
+          }
+
+          echo "=== Banesco request payload expressions (string literals redacted) ===\n";
+          foreach (["referenceNumber", "accountId", "amount", "startDt", "endDt", "phoneNum", "bankId"] as $key) {
+              if (preg_match('/[\'\"]' . preg_quote($key, '/') . '[\'\"]\s*=>\s*([^,\r\n]+)/', $body, $match)) {
+                  $expr = preg_replace('/([\'\"])(?:(?!\1).)*\1/', "'<redacted>'", trim($match[1]));
+                  echo $key . "_expr=" . $expr . "\n";
+              } else {
+                  echo $key . "_expr=not_found\n";
+              }
+          }
+          PHP
+
+          php /tmp/rapidito_inspect_banesco.php "$FILE"
+          rm -f /tmp/rapidito_inspect_banesco.php
 
           echo '=== Current proxy invocation ==='
           grep -n 'BanescoAPI::checkTransaction' "$PROXY" | sed -E 's/[[:space:]]+/ /g' || true
