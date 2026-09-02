@@ -1,12 +1,17 @@
 <?php
 /**
- * proxy_payments.php - Proxy para Reportar Pagos a WispHub
- * Endpoint: POST /api/facturas/reportar-pago/{id}/
+ * proxy_payments.php - Registro de pagos WispHub + validación Banesco.
+ * v4.0: historial central de pagos automáticos y referencia única global
+ * entre portal de autogestión y asistente virtual.
  */
 
-header('Content-Type: application/json');
+error_reporting(0);
+ini_set('display_errors', 0);
+
+header('Content-Type: application/json; charset=UTF-8');
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Methods: POST, GET, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -14,19 +19,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-// ── CONFIGURACIÓN ──────────────────────────────────────────
-define('WISPHUB_API_KEY', 'OYIxEv1H.qmnKH5Ck8NvLWw4Tnyoa7PswdhrJlJ9s');
-define('WISPHUB_API_URL', 'https://api.wisphub.app/api/facturas/reportar-pago/');
+function payment_respond($status, $payload) {
+    http_response_code($status);
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
 
-// Mapa forma_pago: el frontend envía el ID numérico directamente
-// 16749 = Transferencia Bancaria, 16748 = Efectivo
-// También aceptamos strings 'transferencia'/'efectivo' como fallback
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
+    payment_respond(200, ['status' => 'ready', 'version' => '4.0-payment-registry']);
+}
+
+require_once __DIR__ . '/config_wisphub.php';
+require_once __DIR__ . '/payment_registry_lib.php';
+
 const FORMAS_PAGO_MAP = [
     'transferencia' => 16749,
-    'efectivo'      => 16748,
+    'efectivo' => 16748,
 ];
 
-// MIME types permitidos por WispHub
 const MIME_TYPES = [
     'application/pdf',
     'application/msword',
@@ -38,66 +48,85 @@ const MIME_TYPES = [
     'image/heic',
 ];
 
-// ── FUNCIÓN VALIDACIÓN AUTOMÁTICA BANESCO ────────────────────
-function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago, $totalCobrado, $nombreUser) {
-    // Según Swagger docs: POST /api/facturas/registrar-pago/{id_factura}/
-    $url = 'https://api.wisphub.app/api/facturas/registrar-pago/' . $facturaId . '/';
-    
+class DuplicatePaymentReferenceException extends RuntimeException {
+    public $existing;
+    public function __construct($existing = null) {
+        parent::__construct('Esta referencia de pago ya fue utilizada y no puede reportarse nuevamente.');
+        $this->existing = is_array($existing) ? $existing : [];
+    }
+}
+
+function payment_source() {
+    $explicit = strtolower(trim((string) ($_POST['channel'] ?? $_POST['source'] ?? '')));
+    if (in_array($explicit, ['assistant_virtual', 'portal_autogestion'], true)) return $explicit;
+    $ua = strtolower((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''));
+    if (str_contains($ua, 'python-httpx') || str_contains($ua, 'python-requests')) {
+        return 'assistant_virtual';
+    }
+    return 'portal_autogestion';
+}
+
+function payment_clean_text($value, $max = 200) {
+    $text = trim((string) $value);
+    return function_exists('mb_substr') ? mb_substr($text, 0, $max) : substr($text, 0, $max);
+}
+
+function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago, $totalCobrado) {
+    $url = rtrim(WISPHUB_API_URL, '/') . '/facturas/registrar-pago/' . rawurlencode((string) $facturaId) . '/';
     $payload = [
-        'referencia'    => $referencia,
-        'fecha_pago'    => $fechaPago,
-        'total_cobrado' => (float)$totalCobrado,
-        'accion'        => 1, // 1 = Registrar pago y activar el servicio
-        'forma_pago'    => (int)$formaPago
+        'referencia' => $referencia,
+        'fecha_pago' => $fechaPago,
+        'total_cobrado' => (float) $totalCobrado,
+        'accion' => 1,
+        'forma_pago' => (int) $formaPago,
     ];
-    
+
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload),
         CURLOPT_SSL_VERIFYPEER => true,
-        CURLOPT_TIMEOUT        => 30,
-        CURLOPT_HTTPHEADER     => [
-            'Authorization: Api-Key ' . WISPHUB_API_KEY,
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_HTTPHEADER => [
+            'Authorization: Api-Key ' . WISPHUB_TOKEN,
             'Content-Type: application/json',
             'Accept: application/json',
         ],
     ]);
 
-    $response  = curl_exec($ch);
-    $httpCode  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $response = curl_exec($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlError = curl_error($ch);
     curl_close($ch);
 
-    if ($curlError) {
-        throw new Exception("Error de conexión WispHub (registrar-pago): $curlError");
+    if ($response === false || $curlError) {
+        throw new RuntimeException('Error de conexión con WispHub al registrar el pago.');
     }
 
-    $data = json_decode($response, true);
-
-    if ($httpCode !== 200) {
-        $msg = $data['detail'] ?? (is_array($data['errors'] ?? null) ? $data['errors'][0] : null) ?? "Error HTTP $httpCode en registrar-pago: $response";
-        throw new Exception($msg);
+    $data = json_decode((string) $response, true);
+    if ($httpCode < 200 || $httpCode >= 300) {
+        $msg = is_array($data) ? ($data['detail'] ?? (($data['errors'][0] ?? null))) : null;
+        throw new RuntimeException(payment_clean_text($msg ?: 'WispHub no pudo registrar el pago.', 300));
     }
 
     return [
-        'success'  => true,
-        'task_id'  => $data['task_id'] ?? null,
-        'messages' => $data['messages'] ?? [],
+        'success' => true,
+        'task_id' => is_array($data) ? ($data['task_id'] ?? null) : null,
+        'messages' => is_array($data) ? ($data['messages'] ?? []) : [],
     ];
 }
 
-// ── FUNCIÓN PRINCIPAL ──────────────────────────────────────
 function reportarPago($datos, $archivo = null) {
-    $url = WISPHUB_API_URL . $datos['factura_id'] . '/';
-
+    $url = rtrim(WISPHUB_API_URL, '/') . '/facturas/reportar-pago/' . rawurlencode((string) $datos['factura_id']) . '/';
     $postFields = [
-        'forma_pago'       => (string)$datos['forma_pago'],
-        'fecha_pago'       => $datos['fecha_pago'],
-        'referencia'       => $datos['referencia'],
+        'forma_pago' => (string) $datos['forma_pago'],
+        'fecha_pago' => $datos['fecha_pago'],
+        'referencia' => $datos['referencia'],
         'comprobante_pago' => $datos['comprobante_texto'],
-        'nombre_user'      => $datos['nombre_usuario'],
+        'nombre_user' => $datos['nombre_usuario'],
     ];
 
     if ($archivo && file_exists($archivo['tmp_name'])) {
@@ -108,147 +137,197 @@ function reportarPago($datos, $archivo = null) {
         );
     }
 
-    $ch = curl_init();
+    $ch = curl_init($url);
     curl_setopt_array($ch, [
-        CURLOPT_URL            => $url,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $postFields,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $postFields,
         CURLOPT_SSL_VERIFYPEER => true,
-        CURLOPT_TIMEOUT        => 30,
-        CURLOPT_HTTPHEADER     => [
-            'Authorization: Api-Key ' . WISPHUB_API_KEY,
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_HTTPHEADER => [
+            'Authorization: Api-Key ' . WISPHUB_TOKEN,
             'Accept: application/json',
         ],
     ]);
 
-    $response  = curl_exec($ch);
-    $httpCode  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $response = curl_exec($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlError = curl_error($ch);
     curl_close($ch);
 
-    if ($curlError) {
-        throw new Exception("Error de conexión: $curlError");
+    if ($response === false || $curlError) {
+        throw new RuntimeException('Error de conexión con WispHub.');
     }
-
-    $data = json_decode($response, true);
-
-    if ($httpCode !== 200) {
-        $msg = $data['detail'] ?? (is_array($data['errors'] ?? null) ? $data['errors'][0] : null) ?? "Error HTTP $httpCode: $response";
-        throw new Exception($msg);
+    $data = json_decode((string) $response, true);
+    if ($httpCode < 200 || $httpCode >= 300) {
+        $msg = is_array($data) ? ($data['detail'] ?? (($data['errors'][0] ?? null))) : null;
+        throw new RuntimeException(payment_clean_text($msg ?: 'WispHub no pudo recibir el reporte de pago.', 300));
     }
 
     return [
-        'success'  => true,
-        'task_id'  => $data['task_id'] ?? null,
-        'messages' => $data['messages'] ?? [],
+        'success' => true,
+        'task_id' => is_array($data) ? ($data['task_id'] ?? null) : null,
+        'messages' => is_array($data) ? ($data['messages'] ?? []) : [],
     ];
 }
 
-// ── ENDPOINT ───────────────────────────────────────────────
 try {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        throw new Exception('Método no permitido');
+        payment_respond(405, ['status' => 'error', 'message' => 'Método no permitido.']);
     }
 
-    // Campos requeridos que envía PaymentReport.jsx
-    $requeridos = ['invoice_id', 'reference', 'user_name'];
-    foreach ($requeridos as $campo) {
-        if (empty($_POST[$campo])) {
-            throw new Exception("Campo requerido: $campo");
+    foreach (['invoice_id', 'reference', 'user_name'] as $campo) {
+        if (trim((string) ($_POST[$campo] ?? '')) === '') {
+            payment_respond(422, [
+                'status' => 'error',
+                'code' => 'missing_field',
+                'message' => 'Campo requerido: ' . $campo,
+            ]);
         }
     }
 
-    // Resolver forma_pago: puede venir como número (16749) o string (transferencia)
     $rawFormaPago = $_POST['forma_pago'] ?? '16749';
     if (is_numeric($rawFormaPago)) {
-        $formaPagoId = (int)$rawFormaPago;
+        $formaPagoId = (int) $rawFormaPago;
     } elseif (isset(FORMAS_PAGO_MAP[$rawFormaPago])) {
         $formaPagoId = FORMAS_PAGO_MAP[$rawFormaPago];
     } else {
-        $formaPagoId = 16749; // default: transferencia
+        $formaPagoId = 16749;
     }
 
-    // Fecha: el frontend envía "2026-02-21 22:10"
-    $fechaPago = $_POST['payment_date'] ?? date('Y-m-d');
+    $reference = payment_registry_normalize_reference($_POST['reference'] ?? '');
+    if ($reference === '') {
+        payment_respond(422, ['status' => 'error', 'code' => 'invalid_reference', 'message' => 'Referencia de pago inválida.']);
+    }
 
     $datos = [
-        'factura_id'      => preg_replace('/[^0-9]/', '', $_POST['invoice_id']),
-        'forma_pago'      => $formaPagoId,
-        'fecha_pago'      => $fechaPago,
-        'referencia'      => substr(trim($_POST['reference']), 0, 100),
-        'comprobante_texto' => 'Pago reportado desde portal Wifi Rapidito - Ref: ' . trim($_POST['reference']),
-        'nombre_usuario'  => trim($_POST['user_name']),
+        'factura_id' => preg_replace('/[^0-9]/', '', (string) $_POST['invoice_id']),
+        'forma_pago' => $formaPagoId,
+        'fecha_pago' => payment_clean_text($_POST['payment_date'] ?? date('Y-m-d'), 40),
+        'referencia' => $reference,
+        'comprobante_texto' => 'Pago reportado desde Wifi Rapidito - Ref: ' . $reference,
+        'nombre_usuario' => payment_clean_text($_POST['user_name'], 180),
     ];
 
-    // --- INTEGRACIÓN BANESCO API ---
-    // Si la forma de pago es transferencia (u otra cuenta Banesco vinculada), validamos primero.
+    if ($datos['factura_id'] === '') {
+        payment_respond(422, ['status' => 'error', 'code' => 'invalid_invoice', 'message' => 'Factura inválida.']);
+    }
+
+    // La ruta de transferencia se valida automáticamente con Banesco. Solo
+    // después de una validación bancaria positiva se reclama la referencia de
+    // forma atómica. Así dos solicitudes simultáneas nunca llegan dos veces a WispHub.
     if ($formaPagoId === 16749) {
         require_once __DIR__ . '/banesco_api.php';
-        
-        $montoEnviado = $_POST['amount'] ?? 0;
-        
-        $banescoResponse = BanescoAPI::checkTransaction($datos['referencia']);
-        
-        if (!$banescoResponse['success']) {
-            throw new Exception("Banesco: " . $banescoResponse['message']);
+        $montoEnviado = (float) ($_POST['amount'] ?? 0);
+        $banescoResponse = BanescoAPI::checkTransaction($reference);
+
+        if (empty($banescoResponse['success'])) {
+            $message = payment_clean_text($banescoResponse['message'] ?? 'No se pudo validar la operación.', 300);
+            payment_respond(400, [
+                'status' => 'error',
+                'code' => 'bank_not_verified',
+                'wisphub' => false,
+                'message' => 'Banesco: ' . $message,
+                'errors' => ['Banesco: ' . $message],
+            ]);
         }
-        
-        // Banesco OK -> Usamos registrar-pago con accion=1
-        $resultado = registrarPagoAutorizado(
-             $datos['factura_id'], 
-             $datos['referencia'], 
-             $datos['fecha_pago'], 
-             $datos['forma_pago'], 
-             $montoEnviado, 
-             $datos['nombre_usuario']
-        );
-        
-        echo json_encode([
-            'status'       => 'success',
-            'wisphub'      => true,
-            'task_id'      => $resultado['task_id'] ?? null,
-            'message'      => '¡Pago validado exitosamente por Banesco y registrado!',
+
+        $source = payment_source();
+        $recordData = [
+            'source' => $source,
+            'invoice_id' => $datos['factura_id'],
+            'client_name' => payment_clean_text($_POST['client_name'] ?? $_POST['user_name'] ?? '', 180),
+            'user_name' => $datos['nombre_usuario'],
+            'service_id' => payment_clean_text($_POST['service_id'] ?? $_POST['id_servicio'] ?? '', 80),
+            'whatsapp' => preg_replace('/\D+/', '', (string) ($_POST['whatsapp'] ?? $_POST['phone'] ?? $_POST['phone_emisor'] ?? '')) ?: '',
+            'amount_bs' => round($montoEnviado, 2),
+            'payment_date' => $datos['fecha_pago'],
+            'payment_method' => payment_clean_text($_POST['payment_method'] ?? $_POST['payment_type_label'] ?? $_POST['payment_type'] ?? 'Transferencia bancaria', 120),
+            'origin_bank' => payment_clean_text($_POST['banco_origen'] ?? $_POST['origin_bank'] ?? 'Banesco', 120),
+        ];
+
+        $existing = null;
+        $claim = payment_registry_claim($reference, $recordData, $existing);
+        if (!$claim) {
+            throw new DuplicatePaymentReferenceException($existing);
+        }
+
+        try {
+            $resultado = registrarPagoAutorizado(
+                $datos['factura_id'],
+                $reference,
+                $datos['fecha_pago'],
+                $formaPagoId,
+                $montoEnviado
+            );
+        } catch (Throwable $registrationError) {
+            payment_registry_mark_registration_error($reference, $claim['id'], $registrationError->getMessage());
+            throw $registrationError;
+        }
+
+        if (!payment_registry_mark_validated($reference, $claim['id'], [
+            'task_id' => $resultado['task_id'] ?? null,
+            'messages' => $resultado['messages'] ?? [],
+        ])) {
+            // WispHub ya confirmó el pago; no revertimos ni permitimos reutilizar
+            // la referencia. El historial puede recuperarse desde el registro bank_verified.
+            error_log('Rapidito payment registry: no se pudo finalizar ' . $claim['id']);
+        }
+
+        payment_respond(200, [
+            'status' => 'success',
+            'wisphub' => true,
+            'task_id' => $resultado['task_id'] ?? null,
+            'payment_history_id' => $claim['id'],
+            'source' => $source,
+            'message' => '¡Pago validado exitosamente por Banesco y registrado!',
             'verificar_en' => 'https://wisphub.app/reporte-de-pagos/',
         ]);
-        exit;
     }
-    // --- FIN INTEGRACIÓN BANESCO ---
 
-    // Archivo adjunto
+    // Reportes no automáticos mantienen el comportamiento histórico. El
+    // historial solicitado registra únicamente pagos validados por el banco.
     $archivo = null;
     if (isset($_FILES['comprobante_pago_archivo']) && $_FILES['comprobante_pago_archivo']['error'] === UPLOAD_ERR_OK) {
         $f = $_FILES['comprobante_pago_archivo'];
         if ($f['size'] > 10 * 1024 * 1024) {
-            throw new Exception('El archivo no debe superar los 10MB');
+            throw new RuntimeException('El archivo no debe superar los 10MB');
         }
-        if (!in_array($f['type'], MIME_TYPES)) {
-            throw new Exception('Tipo de archivo no permitido. Use: JPG, PNG, PDF, GIF, DOC, DOCX, HEIF');
+        if (!in_array($f['type'], MIME_TYPES, true)) {
+            throw new RuntimeException('Tipo de archivo no permitido. Use: JPG, PNG, PDF, GIF, DOC, DOCX, HEIF');
         }
         $archivo = $f;
     }
-
     if (!$archivo) {
-        throw new Exception('El comprobante de pago (imagen/PDF) es obligatorio');
+        throw new RuntimeException('El comprobante de pago (imagen/PDF) es obligatorio');
     }
 
     $resultado = reportarPago($datos, $archivo);
-
-    echo json_encode([
-        'status'       => 'success',
-        'wisphub'      => true,
-        'task_id'      => $resultado['task_id'],
-        'message'      => 'Pago reportado correctamente en WispHub',
+    payment_respond(200, [
+        'status' => 'success',
+        'wisphub' => true,
+        'task_id' => $resultado['task_id'] ?? null,
+        'message' => 'Pago reportado correctamente en WispHub',
         'verificar_en' => 'https://wisphub.app/reporte-de-pagos/',
     ]);
 
-} catch (Exception $e) {
-    http_response_code(400);
-    echo json_encode([
-        'status'  => 'error',
+} catch (DuplicatePaymentReferenceException $e) {
+    payment_respond(409, [
+        'status' => 'error',
+        'code' => 'duplicate_reference',
         'wisphub' => false,
         'message' => $e->getMessage(),
-        'errors'  => [$e->getMessage()],
+        'errors' => [$e->getMessage()],
+    ]);
+} catch (Throwable $e) {
+    payment_respond(400, [
+        'status' => 'error',
+        'code' => 'payment_error',
+        'wisphub' => false,
+        'message' => payment_clean_text($e->getMessage(), 400),
+        'errors' => [payment_clean_text($e->getMessage(), 400)],
     ]);
 }
 ?>

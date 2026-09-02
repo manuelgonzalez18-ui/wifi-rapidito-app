@@ -24,6 +24,7 @@ const StaffAccess = lazy(() => import('./pages/Staff/StaffAccess'));
 const PromiseRestrictions = lazy(() => import('./pages/Staff/PromiseRestrictions'));
 const LiveMonitor = lazy(() => import('./pages/Admin/LiveMonitor'));
 const FinanceDashboard = lazy(() => import('./pages/Admin/FinanceDashboard'));
+const PaymentHistory = lazy(() => import('./pages/Admin/PaymentHistory'));
 
 const RouteLoader = () => (
   <div className="flex min-h-[45vh] items-center justify-center">
@@ -106,6 +107,7 @@ function App() {
             <Route path="/staff" element={<ProtectedRoute role="staff"><Outlet /></ProtectedRoute>}>
               <Route index element={<StaffDashboard />} />
               <Route path="support" element={<ProtectedRoute permission="support"><StaffSupportDashboard /></ProtectedRoute>} />
+              <Route path="payments" element={<ProtectedRoute permission="finance"><PaymentHistory /></ProtectedRoute>} />
               <Route path="access" element={<ProtectedRoute permission="manage_staff"><StaffAccess /></ProtectedRoute>} />
               <Route path="promise-restrictions" element={<ProtectedRoute permission="manage_staff"><PromiseRestrictions /></ProtectedRoute>} />
               <Route path="clients" element={<ProtectedRoute permission="manage_staff"><Placeholder title="Gestión de clientes" description="Búsqueda y ficha operativa de clientes." /></ProtectedRoute>} />
