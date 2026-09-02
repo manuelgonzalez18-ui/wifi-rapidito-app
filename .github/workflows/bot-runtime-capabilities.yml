@@ -19,14 +19,12 @@ jobs:
         env:
           BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
           BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
-          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
           BOT_VPS_SSH_KEY: ${{ secrets.BOT_VPS_SSH_KEY }}
         shell: bash
         run: |
           set -euo pipefail
           test -n "$BOT_VPS_HOST"
           test -n "$BOT_VPS_PORT"
-          test -n "$BOT_VPS_USER"
           test -n "$BOT_VPS_SSH_KEY"
           mkdir -p ~/.ssh
           printf '%s\n' "$BOT_VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/key
@@ -35,7 +33,7 @@ jobs:
           ssh-keyscan -p "$BOT_VPS_PORT" "$BOT_VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           echo "TARGET_HOST=$BOT_VPS_HOST" >> "$GITHUB_ENV"
           echo "SSH_PORT=$BOT_VPS_PORT" >> "$GITHUB_ENV"
-          echo "TARGET_USER=$BOT_VPS_USER" >> "$GITHUB_ENV"
+          echo "TARGET_USER=root" >> "$GITHUB_ENV"
 
       - name: Inspect Rapidito production read-only
         shell: bash
