@@ -39,6 +39,7 @@ const Sidebar = ({ role }) => {
         { icon: Settings, label: 'Configuración', to: '/client/settings' },
     ];
 
+    // Keep the finance payment history visible in the staff desktop navigation.
     const staffLinks = [
         { icon: LayoutDashboard, label: 'Resumen', to: '/staff' },
         { icon: CreditCard, label: 'Pagos automáticos', to: '/staff/payments', permission: 'finance' },
