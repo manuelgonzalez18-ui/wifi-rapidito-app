@@ -32,7 +32,7 @@ jobs:
           done
           test -s ~/.ssh/known_hosts
 
-      - name: Inspect invoice 9501 and active proxy without writes
+      - name: Inspect invoice 9501, service balance and active proxy without writes
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -51,6 +51,7 @@ jobs:
           if [ -f "$BASE/payment-feature-version.txt" ]; then printf 'deployed_commit='; cat "$BASE/payment-feature-version.txt"; echo; fi
 
           echo '=== Registry rows for invoice 9501 ==='
+          SERVICE_ID=''
           if [ -f "$STORE" ]; then
             php -r '
               $d=json_decode((string)file_get_contents($argv[1]),true); if(!is_array($d)){echo "registry_valid=no\n";exit;}
@@ -61,6 +62,7 @@ jobs:
                   "status"=>$r["status"]??"",
                   "source"=>$r["source"]??"",
                   "invoice_id"=>$r["invoice_id"]??"",
+                  "service_id"=>$r["service_id"]??"",
                   "amount_bs"=>$r["amount_bs"]??"",
                   "invoice_total"=>$r["invoice_total"]??"",
                   "payment_date"=>$r["payment_date"]??"",
@@ -73,27 +75,38 @@ jobs:
                 ],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n";
               }
             ' "$STORE"
+            SERVICE_ID="$(php -r '
+              $d=json_decode((string)file_get_contents($argv[1]),true);
+              if(!is_array($d)) exit;
+              foreach($d as $r){
+                if(is_array($r) && (string)($r["invoice_id"]??"")==="9501"){
+                  echo preg_replace("/[^0-9]/","",(string)($r["service_id"]??"")); break;
+                }
+              }
+            ' "$STORE")"
           else
             echo 'registry_present=no'
           fi
 
-          echo '=== WispHub invoice 9501 read-only ==='
+          echo '=== WispHub invoice 9501 and service balance read-only ==='
           cat > /tmp/check_invoice_9501.php <<'PHP'
           <?php
-          $base=$argv[1]; require $base.'/config_wisphub.php';
-          $url=rtrim(WISPHUB_API_URL,'/').'/facturas/9501/';
-          $ch=curl_init($url);
-          curl_setopt_array($ch,[
-            CURLOPT_RETURNTRANSFER=>true,
-            CURLOPT_TIMEOUT=>20,
-            CURLOPT_SSL_VERIFYPEER=>true,
-            CURLOPT_SSL_VERIFYHOST=>2,
-            CURLOPT_HTTPHEADER=>['Authorization: Api-Key '.WISPHUB_TOKEN,'Accept: application/json']
-          ]);
-          $raw=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);$err=curl_error($ch);curl_close($ch);
+          $base=$argv[1]; $serviceId=$argv[2]??''; require $base.'/config_wisphub.php';
+          function getJson($url){
+            $ch=curl_init($url);
+            curl_setopt_array($ch,[
+              CURLOPT_RETURNTRANSFER=>true,
+              CURLOPT_TIMEOUT=>20,
+              CURLOPT_SSL_VERIFYPEER=>true,
+              CURLOPT_SSL_VERIFYHOST=>2,
+              CURLOPT_HTTPHEADER=>['Authorization: Api-Key '.WISPHUB_TOKEN,'Accept: application/json']
+            ]);
+            $raw=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);$err=curl_error($ch);curl_close($ch);
+            return [$code,$err,json_decode((string)$raw,true),(string)$raw];
+          }
+          [$code,$err,$d,$raw]=getJson(rtrim(WISPHUB_API_URL,'/').'/facturas/9501/');
           echo "invoice_http=$code\n";
           if($err!=='') echo "invoice_curl_error=yes\n";
-          $d=json_decode((string)$raw,true);
           if(is_array($d)){
             $cliente=is_array($d['cliente']??null)?$d['cliente']:[];
             $forma=is_array($d['forma_pago']??null)?$d['forma_pago']:[];
@@ -110,12 +123,34 @@ jobs:
               'forma_pago_id'=>$forma['id']??null,
               'forma_pago_nombre'=>$forma['nombre']??''
             ],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n";
+          }
+          if($serviceId!=='' && ctype_digit($serviceId)){
+            [$sCode,$sErr,$saldo,$sRaw]=getJson(rtrim(WISPHUB_API_URL,'/').'/clientes/'.rawurlencode($serviceId).'/saldo/');
+            echo "service_balance_http=$sCode\n";
+            if($sErr!=='') echo "service_balance_curl_error=yes\n";
+            if(is_array($saldo)){
+              $facturas=is_array($saldo['facturas']??null)?$saldo['facturas']:[];
+              echo 'service_balance='.json_encode([
+                'service_id'=>$serviceId,
+                'saldo'=>$saldo['saldo']??null,
+                'estado'=>$saldo['estado']??null,
+                'pending_count'=>count($facturas),
+                'pending_invoices'=>array_map(fn($f)=>[
+                  'id'=>$f['id_factura']??$f['id']??$f['folio']??'',
+                  'estado'=>$f['estado']??'',
+                  'total'=>$f['total']??null,
+                  'saldo'=>$f['saldo']??null
+                ],$facturas)
+              ],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n";
+            } else {
+              echo 'service_balance_json=no\n';
+              echo 'service_balance_body_prefix='.substr(preg_replace('/\s+/',' ',$sRaw),0,240)."\n";
+            }
           } else {
-            echo 'invoice_json=no\n';
-            echo 'invoice_body_prefix='.substr(preg_replace('/\s+/',' ',(string)$raw),0,240)."\n";
+            echo 'service_balance_skipped=no_service_id\n';
           }
           PHP
-          php /tmp/check_invoice_9501.php "$BASE"
+          php /tmp/check_invoice_9501.php "$BASE" "$SERVICE_ID"
           rm -f /tmp/check_invoice_9501.php
 
           echo '=== Recent PHP/web log hints for invoice 9501 (read-only) ==='
