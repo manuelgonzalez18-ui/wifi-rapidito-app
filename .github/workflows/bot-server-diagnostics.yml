@@ -33,6 +33,7 @@ jobs:
           hosts=("193.203.188.215")
           if [[ -n "${HOSTINGER_HOST:-}" && "$HOSTINGER_HOST" != "193.203.188.215" ]]; then hosts+=("$HOSTINGER_HOST"); fi
           host_index=0
+          found=0
           for host in "${hosts[@]}"; do
             host_index=$((host_index+1))
             users=("$HOSTINGER_USER")
@@ -41,21 +42,10 @@ jobs:
               for port in 22 65002; do
                 SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$port" -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
                 if ! timeout 7 "${SSH[@]}" "$user@$host" 'true' >/dev/null 2>&1; then continue; fi
+                found=1
                 echo "REACHABLE host=$host_index user=$user port=$port"
-                "${SSH[@]}" "$user@$host" 'bash -s' <<'REMOTE'
-set +e
-command -v docker >/dev/null 2>&1; echo "HAS_DOCKER=$?"
-command -v podman >/dev/null 2>&1; echo "HAS_PODMAN=$?"
-command -v systemctl >/dev/null 2>&1; echo "HAS_SYSTEMCTL=$?"
-pgrep -f 'uvicorn|bot_logic|bot_presentation' >/dev/null 2>&1; echo "HAS_BOT_PROCESS=$?"
-pgrep -f 'evolution|evolution-api' >/dev/null 2>&1; echo "HAS_EVOLUTION_PROCESS=$?"
-curl -fsS --max-time 2 http://127.0.0.1:5000/webhook >/dev/null 2>&1; echo "LOCAL_5000_WEBHOOK=$?"
-curl -fsS --max-time 2 http://127.0.0.1:8080 >/dev/null 2>&1; echo "LOCAL_8080=$?"
-count=$(find "$HOME" /opt /srv /root -maxdepth 8 -type f \( -name bot_logic.py -o -name bot_presentation.py \) 2>/dev/null | wc -l | tr -d ' ')
-echo "BOT_FILES_COUNT=$count"
-compose_count=$(find "$HOME" /opt /srv /root -maxdepth 8 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null | xargs -r grep -l 'bot_backend:' 2>/dev/null | wc -l | tr -d ' ')
-echo "BOT_COMPOSE_COUNT=$compose_count"
-REMOTE
+                "${SSH[@]}" "$user@$host" "set +e; command -v docker >/dev/null 2>&1; echo HAS_DOCKER=\$?; command -v podman >/dev/null 2>&1; echo HAS_PODMAN=\$?; command -v systemctl >/dev/null 2>&1; echo HAS_SYSTEMCTL=\$?; pgrep -f 'uvicorn|bot_logic|bot_presentation' >/dev/null 2>&1; echo HAS_BOT_PROCESS=\$?; pgrep -f 'evolution|evolution-api' >/dev/null 2>&1; echo HAS_EVOLUTION_PROCESS=\$?; curl -fsS --max-time 2 http://127.0.0.1:5000/webhook >/dev/null 2>&1; echo LOCAL_5000_WEBHOOK=\$?; curl -fsS --max-time 2 http://127.0.0.1:8080 >/dev/null 2>&1; echo LOCAL_8080=\$?; count=\$(find \"\$HOME\" /opt /srv /root -maxdepth 8 -type f \( -name bot_logic.py -o -name bot_presentation.py \) 2>/dev/null | wc -l | tr -d ' '); echo BOT_FILES_COUNT=\$count; compose_count=\$(find \"\$HOME\" /opt /srv /root -maxdepth 8 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null | xargs -r grep -l 'bot_backend:' 2>/dev/null | wc -l | tr -d ' '); echo BOT_COMPOSE_COUNT=\$compose_count"
               done
             done
           done
+          test "$found" -eq 1
