@@ -1,0 +1,68 @@
+name: Bot Runtime Capabilities
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-runtime-capabilities.yml'
+      - 'vps/LIVE_RUNTIME_CAPABILITIES_TRIGGER'
+
+permissions:
+  contents: read
+
+jobs:
+  capabilities:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          hosts=("193.203.188.215")
+          if [[ -n "${HOSTINGER_HOST:-}" && "$HOSTINGER_HOST" != "193.203.188.215" ]]; then hosts+=("$HOSTINGER_HOST"); fi
+          for host in "${hosts[@]}"; do
+            for port in 65002 22; do
+              if timeout 7 ssh -i ~/.ssh/key -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOSTINGER_USER@$host" true >/dev/null 2>&1; then
+                echo "::add-mask::$host"
+                echo "TARGET_HOST=$host" >> "$GITHUB_ENV"
+                echo "SSH_PORT=$port" >> "$GITHUB_ENV"
+                exit 0
+              fi
+            done
+          done
+          exit 1
+
+      - name: Inspect runtime capabilities read-only
+        env:
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOSTINGER_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set +e
+          for cmd in python3 python pip3 pip node npm npx pm2 screen tmux curl git; do
+            if command -v "$cmd" >/dev/null 2>&1; then
+              version="$($cmd --version 2>/dev/null | head -1)"
+              printf 'RUNTIME_%s=YES %s\n' "$(printf %s "$cmd" | tr '[:lower:]' '[:upper:]')" "$version"
+            else
+              printf 'RUNTIME_%s=NO\n' "$(printf %s "$cmd" | tr '[:lower:]' '[:upper:]')"
+            fi
+          done
+          python3 - <<'PY' 2>/dev/null || true
+import socket
+for port in (5000, 8080, 3000):
+    s=socket.socket(); s.settimeout(.5)
+    rc=s.connect_ex(('127.0.0.1',port)); s.close()
+    print(f'PORT_{port}_LISTENING={1 if rc==0 else 0}')
+PY
+          ulimit -u 2>/dev/null | sed 's/^/ULIMIT_PROCESSES=/' || true
+          df -Pk "$HOME" 2>/dev/null | tail -1 | awk '{print "HOME_FREE_KB=" $4}'
+          REMOTE
