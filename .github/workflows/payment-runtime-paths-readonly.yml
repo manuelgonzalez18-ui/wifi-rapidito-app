@@ -49,14 +49,11 @@ jobs:
           test -s "$PROXY"
 
           echo '=== Live registry contract ==='
-          php -l "$LIB" >/dev/null
           php -r '
             require $argv[1];
             $path=payment_registry_store_path();
             echo "registry_basename=" . basename($path) . "\n";
-            echo "registry_dir_basename=" . basename(dirname($path)) . "\n";
             echo "registry_exists=" . (is_file($path) ? "yes" : "no") . "\n";
-            echo "registry_size=" . (is_file($path) ? (string)filesize($path) : "0") . "\n";
             $records=payment_registry_all_records();
             echo "registry_records=" . count($records) . "\n";
             $counts=[];
@@ -76,31 +73,38 @@ jobs:
               if (!is_array($r) || (($r["status"] ?? "") !== "registration_error")) continue;
               $invoice=preg_replace("/[^0-9]/", "", (string)($r["invoice_id"] ?? ""));
               $source=preg_replace("/[^A-Za-z0-9_-]/", "", (string)($r["source"] ?? "unknown"));
-              $updated=preg_replace("/[^0-9T:+.-]/", "", (string)($r["updated_at"] ?? ""));
               $error=preg_replace("/\s+/", " ", trim((string)($r["registration_error"] ?? "")));
-              $error=substr($error,0,220);
-              echo "invoice=" . ($invoice ?: "unknown") . " source=" . ($source ?: "unknown") . " updated=" . $updated . " error=" . $error . "\n";
+              echo "invoice=" . ($invoice ?: "unknown") . " source=" . ($source ?: "unknown") . " error=" . substr($error,0,220) . "\n";
             }
           ' "$LIB"
-
-          echo '=== Nearby payment files metadata only ==='
-          PRIVATE="$(dirname "$BASE")/.wifi-rapidito-private"
-          if [ -d "$PRIVATE" ]; then
-            find "$PRIVATE" -maxdepth 1 -type f \( -iname '*payment*.json' -o -iname '*payment*.lock' \) -printf '%f\t%s bytes\t%TY-%Tm-%TdT%TH:%TM:%TS\n' | sort
-          else
-            echo 'private_dir_present=no'
-          fi
 
           echo '=== Live WispHub config ==='
           php -r '
             require $argv[1];
-            foreach (["WISPHUB_API_URL"] as $name) {
-              if (!defined($name)) { echo $name . "=undefined\n"; continue; }
-              $v=(string)constant($name);
-              echo $name . "_host=" . (parse_url($v, PHP_URL_HOST) ?: "invalid") . "\n";
-              echo $name . "_path=" . (parse_url($v, PHP_URL_PATH) ?: "/") . "\n";
-            }
+            $v=defined("WISPHUB_API_URL") ? (string)WISPHUB_API_URL : "";
+            echo "WISPHUB_API_URL_host=" . (parse_url($v, PHP_URL_HOST) ?: "invalid") . "\n";
+            echo "WISPHUB_API_URL_path=" . (parse_url($v, PHP_URL_PATH) ?: "/") . "\n";
             echo "WISPHUB_TOKEN_configured=" . ((defined("WISPHUB_TOKEN") && strlen((string)WISPHUB_TOKEN)>0) ? "yes" : "no") . "\n";
+          ' "$CONFIG"
+
+          echo '=== Read-only host comparison ==='
+          php -r '
+            require $argv[1];
+            if (!defined("WISPHUB_TOKEN") || WISPHUB_TOKEN === "") { echo "token_missing\n"; exit(0); }
+            $invoice="9501";
+            foreach (["app"=>"https://api.wisphub.app/api/facturas/$invoice/", "net"=>"https://api.wisphub.net/api/facturas/$invoice/"] as $label=>$url) {
+              $ch=curl_init($url);
+              curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>20,CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"]]);
+              $body=curl_exec($ch);
+              $code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);
+              $ctype=(string)curl_getinfo($ch,CURLINFO_CONTENT_TYPE);
+              $err=curl_error($ch);
+              curl_close($ch);
+              echo $label . "_http=" . $code . "\n";
+              echo $label . "_content_type=" . preg_replace("/[^A-Za-z0-9\/+;=._ -]/","",$ctype) . "\n";
+              echo $label . "_curl_error=" . ($err!=="" ? "yes" : "no") . "\n";
+              echo $label . "_json=" . ((is_string($body) && is_array(json_decode($body,true))) ? "yes" : "no") . "\n";
+            }
           ' "$CONFIG"
 
           echo '=== Live proxy WispHub URL construction ==='
