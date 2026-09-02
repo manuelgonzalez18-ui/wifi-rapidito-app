@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 import bot_presentation as presentation
 
 bot = presentation.bot
+entry = presentation.entry
 
 PHONE = "584241234567"
 IDENTITY = {
@@ -22,6 +23,52 @@ INVOICE = {"id_factura": 9150, "folio": 9150, "estado": "Pendiente"}
 class BotPresentationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         bot.user_states.clear()
+        bot._processed_message_ids.clear()
+
+    def test_capa_historica_queda_conectada_al_app(self):
+        self.assertIs(bot.process_user_message, entry.process_user_message)
+        self.assertIs(bot.handle_debt, presentation.handle_debt)
+        self.assertIs(bot.start_payment, presentation.start_payment)
+        self.assertIs(bot.handle_payment_flow, presentation.handle_payment_flow)
+        self.assertIsNotNone(presentation.app)
+
+    async def test_identificacion_historica_pide_usuario_y_muestra_cuenta(self):
+        send = AsyncMock(return_value=True)
+        lookup = AsyncMock(return_value=dict(IDENTITY))
+
+        with patch.object(bot, "enviar_whatsapp", send), \
+             patch.object(entry, "find_client_by_username", lookup):
+            await entry.process_user_message(PHONE, "hola")
+            self.assertIn("Ya soy cliente", send.await_args.args[1])
+
+            await entry.process_user_message(PHONE, "1")
+            self.assertEqual(bot.state_for(PHONE)["mode"], "CLIENT_USERNAME")
+            self.assertIn("usuario asignado", send.await_args.args[1])
+
+            await entry.process_user_message(PHONE, "clienteprueba")
+
+        lookup.assert_awaited_once_with("clienteprueba")
+        state = bot.state_for(PHONE)
+        self.assertEqual(state["mode"], "CLIENT_MENU")
+        self.assertEqual(state["identity"]["username"], "clienteprueba")
+        texts = [call.args[1] for call in send.await_args_list]
+        self.assertTrue(any("Buscando tu cuenta" in text for text in texts))
+        self.assertTrue(any("¡Te encontré!" in text and "Activo" in text for text in texts))
+        self.assertTrue(any("10. 💜 Promesa de Pago" in text for text in texts))
+
+    async def test_menu_despues_de_identificar_no_vuelve_a_pedir_usuario(self):
+        state = bot.state_for(PHONE)
+        state["mode"] = "CLIENT_MENU"
+        state["identity"] = dict(IDENTITY)
+        send = AsyncMock(return_value=True)
+
+        with patch.object(bot, "enviar_whatsapp", send):
+            await entry.process_user_message(PHONE, "menu")
+
+        self.assertEqual(state["mode"], "CLIENT_MENU")
+        text = send.await_args.args[1]
+        self.assertIn("¿En qué puedo ayudarte", text)
+        self.assertNotIn("usuario asignado", text)
 
     def test_datos_bancarios_historicos(self):
         text = presentation.bank_details_text(Decimal("779.95"))
