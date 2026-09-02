@@ -81,15 +81,41 @@ Rama de trabajo: `reconstruccion-bot-10-opciones`.
 
 ## Reportes administrativos
 
-Todas las gestiones relevantes deben enviar una notificación al número administrativo configurado por variable de entorno. El número no debe quedar hardcodeado en el repositorio.
+Todas las gestiones relevantes envían una notificación al número administrativo configurado mediante `ADMIN_REPORT_NUMBER`.
 
 ## Integraciones
 
 - **WhatsApp:** Meta Cloud API, conservando Evolution como fallback si ya está configurado.
 - **WispHub:** identificación del cliente, facturas, estado del servicio, creación de tickets y registro de operaciones.
-- **Banesco:** reutilizar la lógica de validación automática existente en el portal de autogestión; no duplicar reglas distintas entre portal y bot.
-- **BCV:** usar la misma fuente/tasa vigente que utiliza el portal.
+- **Banesco:** el bot reutiliza `proxy_payments.php`, que es el adaptador usado por el portal para validar y registrar el pago; el bot no implementa una regla bancaria paralela.
+- **Promesas:** el bot reutiliza `proxy_promises.php` y `promise_restrictions.php` para respetar las mismas restricciones del portal.
+- **Tickets:** el bot reutiliza `proxy.php`, por lo que la creación mantiene el formato y la compatibilidad ya probada con WispHub.
+- **BCV:** se consulta la misma fuente utilizada actualmente por el formulario del portal.
+
+## Estado de implementación
+
+- [x] Menú de 10 opciones.
+- [x] Identificación automática del cliente por el WhatsApp registrado en WispHub.
+- [x] Consulta de facturas pendientes.
+- [x] Cálculo de mensualidad USD 25 × tasa BCV.
+- [x] Datos bancarios.
+- [x] Flujo conversacional completo de Reportar Pago.
+- [x] Validación Banesco reutilizando el adaptador del portal.
+- [x] Reporte de pago verificado y reporte de revisión manual.
+- [x] Fallas Sin Internet, Lento e Intermitente con MAC.
+- [x] Falla Masiva sin solicitar MAC.
+- [x] Creación de tickets WispHub y uso del número real retornado.
+- [x] Cambio de clave con confirmación previa y reporte interno.
+- [x] Estado Activo/Suspendido.
+- [x] Promesa de Pago con ventana mensual, única factura pendiente y restricción por incumplimiento.
+- [x] Reportes administrativos por WhatsApp.
+- [x] Pruebas unitarias de validaciones puras en `test_bot_flows.py`.
+- [ ] Prueba de punta a punta contra el VPS antes de fusionar a `main`.
+
+## Variables nuevas o relevantes
+
+Consultar `vps/.env.example`. Las variables principales son `WISPHUB_API_KEY`, credenciales de Meta/Evolution, `ADMIN_REPORT_NUMBER` y las URLs de los adaptadores del portal.
 
 ## Criterio de reconstrucción
 
-La lógica confirmada por capturas tiene prioridad. Las partes aún no verificadas deben implementarse como adaptadores configurables y no como supuestos rígidos.
+La lógica confirmada por capturas tiene prioridad. Las partes aún no verificadas se mantienen como adaptadores configurables y no como supuestos rígidos.
