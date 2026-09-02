@@ -2,6 +2,8 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+ENV ADMIN_REPORT_NUMBER=584242268245
+
 COPY requirements-bot.txt .
 RUN pip install --no-cache-dir -r requirements-bot.txt
 
