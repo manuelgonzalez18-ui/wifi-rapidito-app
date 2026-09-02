@@ -25,7 +25,7 @@ function payment_respond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    payment_respond(200, ['status' => 'ready', 'version' => '4.1-wisphub-register-fix']);
+    payment_respond(200, ['status' => 'ready', 'version' => '4.2-wisphub-datetime-errors']);
 }
 
 require_once __DIR__ . '/config_wisphub.php';
@@ -49,6 +49,7 @@ const MIME_TYPES = [
 
 class DuplicatePaymentReferenceException extends RuntimeException {
     public $existing;
+
     public function __construct($existing = null) {
         parent::__construct('Esta referencia de pago ya fue utilizada y no puede reportarse nuevamente.');
         $this->existing = is_array($existing) ? $existing : [];
@@ -58,6 +59,7 @@ class DuplicatePaymentReferenceException extends RuntimeException {
 function payment_source() {
     $explicit = strtolower(trim((string) ($_POST['channel'] ?? $_POST['source'] ?? '')));
     if (in_array($explicit, ['assistant_virtual', 'portal_autogestion'], true)) return $explicit;
+
     $ua = strtolower((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''));
     if (str_contains($ua, 'python-httpx') || str_contains($ua, 'python-requests')) return 'assistant_virtual';
     return 'portal_autogestion';
@@ -68,26 +70,107 @@ function payment_clean_text($value, $max = 200) {
     return function_exists('mb_substr') ? mb_substr($text, 0, $max) : substr($text, 0, $max);
 }
 
+function payment_collect_error_values($value, $prefix = '', &$out = []) {
+    if (is_scalar($value)) {
+        $text = trim((string) $value);
+        if ($text !== '') {
+            $out[] = $prefix !== '' ? $prefix . ': ' . $text : $text;
+        }
+        return;
+    }
+
+    if (!is_array($value)) return;
+
+    foreach ($value as $key => $item) {
+        $keyText = is_string($key) ? trim($key) : '';
+        $nextPrefix = $prefix;
+        if ($keyText !== '' && !in_array($keyText, ['detail', 'message', 'error', 'errors', 'messages', 'non_field_errors'], true)) {
+            $nextPrefix = $prefix !== '' ? $prefix . '.' . $keyText : $keyText;
+        }
+        payment_collect_error_values($item, $nextPrefix, $out);
+        if (count($out) >= 8) return;
+    }
+}
+
 function payment_wisphub_message($data, $fallback) {
     if (!is_array($data)) return $fallback;
+
     foreach (['detail', 'message', 'error'] as $key) {
         if (isset($data[$key]) && is_scalar($data[$key]) && trim((string) $data[$key]) !== '') {
-            return payment_clean_text($data[$key], 400);
+            return payment_clean_text($data[$key], 500);
         }
     }
-    foreach (['errors', 'messages'] as $key) {
-        if (!isset($data[$key])) continue;
-        $value = $data[$key];
-        if (is_scalar($value) && trim((string) $value) !== '') return payment_clean_text($value, 400);
-        if (is_array($value)) {
-            $flat = [];
-            array_walk_recursive($value, function ($item) use (&$flat) {
-                if (is_scalar($item) && trim((string) $item) !== '') $flat[] = trim((string) $item);
-            });
-            if ($flat) return payment_clean_text(implode(' | ', array_slice($flat, 0, 4)), 400);
+
+    $flat = [];
+    foreach (['errors', 'messages', 'non_field_errors'] as $key) {
+        if (array_key_exists($key, $data)) {
+            payment_collect_error_values($data[$key], '', $flat);
         }
     }
+
+    if (!$flat) {
+        foreach ($data as $key => $value) {
+            if (in_array((string) $key, ['status', 'code', 'success', 'task_id'], true)) continue;
+            payment_collect_error_values($value, is_string($key) ? $key : '', $flat);
+            if (count($flat) >= 8) break;
+        }
+    }
+
+    if ($flat) {
+        $flat = array_values(array_unique(array_filter($flat)));
+        return payment_clean_text(implode(' | ', array_slice($flat, 0, 6)), 500);
+    }
+
     return $fallback;
+}
+
+function payment_parse_date_only($value) {
+    $raw = trim((string) $value);
+    if ($raw === '') return null;
+
+    $timezone = new DateTimeZone('America/Caracas');
+    $candidates = [
+        ['!Y-m-d H:i', substr($raw, 0, 16)],
+        ['!Y-m-d\TH:i', substr($raw, 0, 16)],
+        ['!d/m/Y H:i', substr($raw, 0, 16)],
+        ['!Y-m-d', substr($raw, 0, 10)],
+        ['!d/m/Y', substr($raw, 0, 10)],
+    ];
+
+    foreach ($candidates as [$format, $candidate]) {
+        $dt = DateTime::createFromFormat($format, $candidate, $timezone);
+        if (!$dt) continue;
+        $errors = DateTime::getLastErrors();
+        if (is_array($errors) && (($errors['warning_count'] ?? 0) > 0 || ($errors['error_count'] ?? 0) > 0)) continue;
+        return $dt->format('Y-m-d');
+    }
+
+    return null;
+}
+
+function payment_normalize_wisphub_datetime($dateValue, $timeValue = '') {
+    $rawDate = trim((string) $dateValue);
+    $rawTime = trim((string) $timeValue);
+    $timezone = new DateTimeZone('America/Caracas');
+
+    foreach (['!Y-m-d H:i', '!Y-m-d\TH:i', '!d/m/Y H:i'] as $format) {
+        $dt = DateTime::createFromFormat($format, substr($rawDate, 0, 16), $timezone);
+        if (!$dt) continue;
+        $errors = DateTime::getLastErrors();
+        if (is_array($errors) && (($errors['warning_count'] ?? 0) > 0 || ($errors['error_count'] ?? 0) > 0)) continue;
+        return $dt->format('Y-m-d H:i');
+    }
+
+    $dateOnly = payment_parse_date_only($rawDate);
+    if ($dateOnly === null) {
+        throw new InvalidArgumentException('Fecha de pago inválida. Use DD/MM/YYYY o YYYY-MM-DD.');
+    }
+
+    if (!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/', $rawTime)) {
+        $rawTime = (new DateTime('now', $timezone))->format('H:i');
+    }
+
+    return $dateOnly . ' ' . $rawTime;
 }
 
 function payment_banesco_options($datos, $montoEnviado) {
@@ -99,15 +182,19 @@ function payment_banesco_options($datos, $montoEnviado) {
 
     $options = [
         'amount' => (float) $montoEnviado,
-        'paymentDate' => $datos['fecha_pago'],
-        'payment_date' => $datos['fecha_pago'],
+        // Banesco ya fue certificado con la fecha sin hora. WispHub recibe
+        // fecha/hora por separado en $datos['fecha_pago'].
+        'paymentDate' => $datos['fecha_banco'],
+        'payment_date' => $datos['fecha_banco'],
         'bankId' => $bankId,
         'banco_origen' => $bankId,
     ];
+
     if ($phoneNum !== '') {
         $options['phoneNum'] = $phoneNum;
         $options['phone_emisor'] = $phoneNum;
     }
+
     return $options;
 }
 
@@ -125,6 +212,7 @@ function obtenerFacturaWispHub($facturaId) {
             'Accept: application/json',
         ],
     ]);
+
     $response = curl_exec($ch);
     $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlError = curl_error($ch);
@@ -133,10 +221,13 @@ function obtenerFacturaWispHub($facturaId) {
     if ($response === false || $curlError) {
         throw new RuntimeException('No se pudo consultar la factura en WispHub.');
     }
+
     $data = json_decode((string) $response, true);
     if ($httpCode < 200 || $httpCode >= 300 || !is_array($data)) {
-        throw new RuntimeException(payment_wisphub_message($data, 'WispHub no encontró la factura indicada.'));
+        $message = payment_wisphub_message($data, 'WispHub no encontró la factura indicada.');
+        throw new RuntimeException('WispHub HTTP ' . $httpCode . ': ' . $message);
     }
+
     return $data;
 }
 
@@ -146,7 +237,7 @@ function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago
     $payload = [
         'referencia' => $referencia,
         'fecha_pago' => $fechaPago,
-        // WispHub espera el total de la factura en su moneda, NO el monto Bs.
+        // WispHub espera el total de la factura en su moneda, no el monto Bs.
         'total_cobrado' => (float) $totalFactura,
         'accion' => 1,
         'forma_pago' => (int) $formaPago,
@@ -179,7 +270,8 @@ function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago
 
     $data = json_decode((string) $response, true);
     if ($httpCode < 200 || $httpCode >= 300) {
-        throw new RuntimeException(payment_wisphub_message($data, 'WispHub no pudo registrar el pago.'));
+        $message = payment_wisphub_message($data, 'WispHub no pudo registrar el pago.');
+        throw new RuntimeException('WispHub HTTP ' . $httpCode . ': ' . $message);
     }
 
     return [
@@ -198,6 +290,7 @@ function reportarPago($datos, $archivo = null) {
         'comprobante_pago' => $datos['comprobante_texto'],
         'nombre_user' => $datos['nombre_usuario'],
     ];
+
     if ($archivo && file_exists($archivo['tmp_name'])) {
         $postFields['comprobante_pago_archivo'] = new CURLFile($archivo['tmp_name'], $archivo['type'], $archivo['name']);
     }
@@ -216,16 +309,22 @@ function reportarPago($datos, $archivo = null) {
             'Accept: application/json',
         ],
     ]);
+
     $response = curl_exec($ch);
     $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlError = curl_error($ch);
     curl_close($ch);
 
-    if ($response === false || $curlError) throw new RuntimeException('Error de conexión con WispHub.');
+    if ($response === false || $curlError) {
+        throw new RuntimeException('Error de conexión con WispHub.');
+    }
+
     $data = json_decode((string) $response, true);
     if ($httpCode < 200 || $httpCode >= 300) {
-        throw new RuntimeException(payment_wisphub_message($data, 'WispHub no pudo recibir el reporte de pago.'));
+        $message = payment_wisphub_message($data, 'WispHub no pudo recibir el reporte de pago.');
+        throw new RuntimeException('WispHub HTTP ' . $httpCode . ': ' . $message);
     }
+
     return [
         'success' => true,
         'task_id' => is_array($data) ? ($data['task_id'] ?? null) : null,
@@ -240,7 +339,11 @@ try {
 
     foreach (['invoice_id', 'reference', 'user_name'] as $campo) {
         if (trim((string) ($_POST[$campo] ?? '')) === '') {
-            payment_respond(422, ['status' => 'error', 'code' => 'missing_field', 'message' => 'Campo requerido: ' . $campo]);
+            payment_respond(422, [
+                'status' => 'error',
+                'code' => 'missing_field',
+                'message' => 'Campo requerido: ' . $campo,
+            ]);
         }
     }
 
@@ -251,27 +354,57 @@ try {
 
     $reference = payment_registry_normalize_reference($_POST['reference'] ?? '');
     if ($reference === '') {
-        payment_respond(422, ['status' => 'error', 'code' => 'invalid_reference', 'message' => 'Referencia de pago inválida.']);
+        payment_respond(422, [
+            'status' => 'error',
+            'code' => 'invalid_reference',
+            'message' => 'Referencia de pago inválida.',
+        ]);
     }
+
+    $rawPaymentDate = payment_clean_text($_POST['payment_date'] ?? '', 40);
+    if ($rawPaymentDate === '') {
+        $rawPaymentDate = (new DateTime('now', new DateTimeZone('America/Caracas')))->format('Y-m-d');
+    }
+    $fechaBanco = payment_parse_date_only($rawPaymentDate);
+    if ($fechaBanco === null) {
+        payment_respond(422, [
+            'status' => 'error',
+            'code' => 'invalid_payment_date',
+            'message' => 'Fecha de pago inválida. Use DD/MM/YYYY o YYYY-MM-DD.',
+        ]);
+    }
+    $fechaWispHub = payment_normalize_wisphub_datetime(
+        $rawPaymentDate,
+        payment_clean_text($_POST['payment_time'] ?? '', 10)
+    );
 
     $datos = [
         'factura_id' => preg_replace('/[^0-9]/', '', (string) $_POST['invoice_id']),
         'forma_pago' => $formaPagoId,
-        'fecha_pago' => payment_clean_text($_POST['payment_date'] ?? date('Y-m-d'), 40),
+        'fecha_pago' => $fechaWispHub,
+        'fecha_banco' => $fechaBanco,
         'referencia' => $reference,
         'comprobante_texto' => 'Pago reportado desde Wifi Rapidito - Ref: ' . $reference,
         'nombre_usuario' => payment_clean_text($_POST['user_name'], 180),
     ];
+
     if ($datos['factura_id'] === '') {
-        payment_respond(422, ['status' => 'error', 'code' => 'invalid_invoice', 'message' => 'Factura inválida.']);
+        payment_respond(422, [
+            'status' => 'error',
+            'code' => 'invalid_invoice',
+            'message' => 'Factura inválida.',
+        ]);
     }
 
     if ($formaPagoId === 16749) {
         require_once __DIR__ . '/banesco_api.php';
+
         $montoEnviado = (float) ($_POST['amount'] ?? 0);
         if ($montoEnviado <= 0) {
             payment_respond(422, [
-                'status' => 'error', 'code' => 'invalid_amount', 'wisphub' => false,
+                'status' => 'error',
+                'code' => 'invalid_amount',
+                'wisphub' => false,
                 'message' => 'El monto del pago debe ser mayor a cero.',
                 'errors' => ['El monto del pago debe ser mayor a cero.'],
             ]);
@@ -282,7 +415,9 @@ try {
         if (empty($banescoResponse['success'])) {
             $message = payment_clean_text($banescoResponse['message'] ?? 'No se pudo validar la operación.', 300);
             payment_respond(400, [
-                'status' => 'error', 'code' => 'bank_not_verified', 'wisphub' => false,
+                'status' => 'error',
+                'code' => 'bank_not_verified',
+                'wisphub' => false,
                 'message' => 'Banesco: ' . $message,
                 'errors' => ['Banesco: ' . $message],
             ]);
@@ -317,7 +452,11 @@ try {
 
         try {
             $resultado = registrarPagoAutorizado(
-                $datos['factura_id'], $reference, $datos['fecha_pago'], $formaPagoId, $totalFactura
+                $datos['factura_id'],
+                $reference,
+                $datos['fecha_pago'],
+                $formaPagoId,
+                $totalFactura
             );
         } catch (Throwable $registrationError) {
             payment_registry_mark_registration_error($reference, $claim['id'], $registrationError->getMessage());
@@ -332,7 +471,8 @@ try {
         }
 
         payment_respond(200, [
-            'status' => 'success', 'wisphub' => true,
+            'status' => 'success',
+            'wisphub' => true,
             'task_id' => $resultado['task_id'] ?? null,
             'payment_history_id' => $claim['id'],
             'source' => $source,
@@ -345,17 +485,23 @@ try {
     $archivo = null;
     if (isset($_FILES['comprobante_pago_archivo']) && $_FILES['comprobante_pago_archivo']['error'] === UPLOAD_ERR_OK) {
         $f = $_FILES['comprobante_pago_archivo'];
-        if ($f['size'] > 10 * 1024 * 1024) throw new RuntimeException('El archivo no debe superar los 10MB');
+        if ($f['size'] > 10 * 1024 * 1024) {
+            throw new RuntimeException('El archivo no debe superar los 10MB');
+        }
         if (!in_array($f['type'], MIME_TYPES, true)) {
             throw new RuntimeException('Tipo de archivo no permitido. Use: JPG, PNG, PDF, GIF, DOC, DOCX, HEIF');
         }
         $archivo = $f;
     }
-    if (!$archivo) throw new RuntimeException('El comprobante de pago (imagen/PDF) es obligatorio');
+
+    if (!$archivo) {
+        throw new RuntimeException('El comprobante de pago (imagen/PDF) es obligatorio');
+    }
 
     $resultado = reportarPago($datos, $archivo);
     payment_respond(200, [
-        'status' => 'success', 'wisphub' => true,
+        'status' => 'success',
+        'wisphub' => true,
         'task_id' => $resultado['task_id'] ?? null,
         'message' => 'Pago reportado correctamente en WispHub',
         'verificar_en' => 'https://wisphub.app/reporte-de-pagos/',
@@ -363,14 +509,19 @@ try {
 
 } catch (DuplicatePaymentReferenceException $e) {
     payment_respond(409, [
-        'status' => 'error', 'code' => 'duplicate_reference', 'wisphub' => false,
-        'message' => $e->getMessage(), 'errors' => [$e->getMessage()],
+        'status' => 'error',
+        'code' => 'duplicate_reference',
+        'wisphub' => false,
+        'message' => $e->getMessage(),
+        'errors' => [$e->getMessage()],
     ]);
 } catch (Throwable $e) {
     payment_respond(400, [
-        'status' => 'error', 'code' => 'payment_error', 'wisphub' => false,
-        'message' => payment_clean_text($e->getMessage(), 400),
-        'errors' => [payment_clean_text($e->getMessage(), 400)],
+        'status' => 'error',
+        'code' => 'payment_error',
+        'wisphub' => false,
+        'message' => payment_clean_text($e->getMessage(), 500),
+        'errors' => [payment_clean_text($e->getMessage(), 500)],
     ]);
 }
 ?>
