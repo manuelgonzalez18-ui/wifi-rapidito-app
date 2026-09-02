@@ -12,7 +12,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     env:
       TARGET_HOST: 76.13.100.2
       SSH_PORT: '22'
@@ -20,7 +20,7 @@ jobs:
       EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
       NEW_ADMIN_REPORT_NUMBER: '584242268245'
     steps:
-      - name: Configure verified SSH
+      - name: Configure and verify SSH identity
         env:
           BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
         shell: bash
@@ -31,15 +31,25 @@ jobs:
           chmod 600 ~/.ssh/key
           ssh-keygen -y -f ~/.ssh/key >/dev/null
           : > ~/.ssh/known_hosts
-          for attempt in {1..6}; do
-            if ssh-keyscan -T 8 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null && test -s ~/.ssh/known_hosts; then
+
+          connected=0
+          for attempt in {1..8}; do
+            if ssh -i ~/.ssh/key -p "$SSH_PORT" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=10 \
+              -o StrictHostKeyChecking=accept-new \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$TARGET_USER@$TARGET_HOST" true; then
+              connected=1
               break
             fi
-            sleep 3
+            sleep 4
           done
+          test "$connected" = 1
           test -s ~/.ssh/known_hosts
           actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
           test "$actual_fp" = "$EXPECTED_HOST_FP"
+          echo 'SSH_IDENTITY_VERIFIED=1'
 
       - name: Verify admin report number in production
         shell: bash
