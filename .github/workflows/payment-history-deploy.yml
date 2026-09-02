@@ -8,6 +8,7 @@ on:
       - 'public/proxy_invoices.php'
       - 'public/payment_registry_lib.php'
       - 'public/payment_history.php'
+      - 'src/pages/Client/PaymentReport.jsx'
       - 'src/pages/Admin/PaymentHistory.jsx'
       - 'src/App.jsx'
       - 'src/components/layout/Sidebar.jsx'
@@ -19,6 +20,7 @@ on:
       - 'public/proxy_invoices.php'
       - 'public/payment_registry_lib.php'
       - 'public/payment_history.php'
+      - 'src/pages/Client/PaymentReport.jsx'
       - 'src/pages/Admin/PaymentHistory.jsx'
       - 'src/App.jsx'
       - 'src/components/layout/Sidebar.jsx'
@@ -61,7 +63,7 @@ jobs:
 
       - name: Validate frontend
         run: |
-          npx eslint src/App.jsx src/components/layout/Sidebar.jsx src/pages/Admin/PaymentHistory.jsx
+          npx eslint src/App.jsx src/components/layout/Sidebar.jsx src/pages/Admin/PaymentHistory.jsx src/pages/Client/PaymentReport.jsx
           npm run build
 
       - name: Configure Hostinger SSH
@@ -150,7 +152,7 @@ jobs:
             HISTORY="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/payment_history.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             VERSION="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/payment-feature-version.txt?sha=$GITHUB_SHA" 2>/dev/null || true)"
 
-            if grep -q '4.1-wisphub-register-fix' <<<"$PROXY" \
+            if grep -q '4.2-wisphub-datetime-errors' <<<"$PROXY" \
               && grep -q '4.0-wisphub-saldo' <<<"$INVOICE_HEALTH" \
               && grep -q '"id_factura":8990' <<<"$INVOICE_412" \
               && grep -q '"total":25' <<<"$INVOICE_412" \
