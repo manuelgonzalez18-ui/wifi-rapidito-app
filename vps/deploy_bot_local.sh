@@ -19,8 +19,17 @@ python3 -m py_compile bot_flows.py bot_logic.py bot_entry.py bot_presentation.py
 python3 -m unittest test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py
 bash -n reset_whatsapp.sh
 
+grep -q 'bot_presentation:app' Dockerfile.bot || {
+  echo "❌ Dockerfile.bot no está arrancando la capa final bot_presentation:app."
+  exit 1
+}
+
 echo "🐳 Construyendo imagen del bot..."
 docker compose build bot_backend
+
+echo "🧩 Verificando que la imagen cargue la capa final reconstruida..."
+docker compose run --rm --no-deps bot_backend python -c \
+  'import bot_presentation as p; assert p.app is not None; assert p.bot.process_user_message is p.entry.process_user_message; print("✅ Capa histórica/presentación cargada.")'
 
 echo "🔐 Ejecutando preflight desde el mismo entorno del contenedor..."
 docker compose run --rm --no-deps bot_backend python validate_bot_env.py --network
