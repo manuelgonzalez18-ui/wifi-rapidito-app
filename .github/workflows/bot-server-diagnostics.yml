@@ -18,34 +18,64 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Probe known server endpoints without changes
+      - name: Configure SSH
         env:
-          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
-          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
+          BOT_VPS_SSH_KEY: ${{ secrets.BOT_VPS_SSH_KEY }}
         shell: bash
         run: |
           set -euo pipefail
+          test -n "$BOT_VPS_HOST"
+          test -n "$BOT_VPS_PORT"
+          test -n "$BOT_VPS_USER"
+          test -n "$BOT_VPS_SSH_KEY"
           mkdir -p ~/.ssh
-          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
-          chmod 600 ~/.ssh/hostinger_deploy
+          printf '%s\n' "$BOT_VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/rapidito
+          chmod 600 ~/.ssh/rapidito
+          ssh-keygen -y -f ~/.ssh/rapidito >/dev/null
+          ssh-keyscan -p "$BOT_VPS_PORT" "$BOT_VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          hosts=("193.203.188.215")
-          if [[ -n "${HOSTINGER_HOST:-}" && "$HOSTINGER_HOST" != "193.203.188.215" ]]; then hosts+=("$HOSTINGER_HOST"); fi
-          host_index=0
-          found=0
-          for host in "${hosts[@]}"; do
-            host_index=$((host_index+1))
-            users=("$HOSTINGER_USER")
-            [[ $host_index -eq 1 ]] && users+=(root ubuntu debian)
-            for user in "${users[@]}"; do
-              for port in 22 65002; do
-                SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$port" -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-                if ! timeout 7 "${SSH[@]}" "$user@$host" 'true' >/dev/null 2>&1; then continue; fi
-                found=1
-                echo "REACHABLE host=$host_index user=$user port=$port"
-                "${SSH[@]}" "$user@$host" "set +e; for c in python3 pip3 node npm npx pm2 screen tmux git curl; do command -v \$c >/dev/null 2>&1; rc=\$?; echo CMD_\$(echo \$c | tr a-z A-Z)=\$rc; done; python3 --version 2>/dev/null | sed 's/^/PYTHON_VERSION=/' || true; node --version 2>/dev/null | sed 's/^/NODE_VERSION=/' || true; npm --version 2>/dev/null | sed 's/^/NPM_VERSION=/' || true; command -v docker >/dev/null 2>&1; echo HAS_DOCKER=\$?; test -x /usr/bin/docker; echo USR_BIN_DOCKER=\$?; test -S /var/run/docker.sock; echo DOCKER_SOCKET=\$?; sudo -n true >/dev/null 2>&1; echo PASSWORDLESS_SUDO=\$?; sudo -n docker --version >/dev/null 2>&1; echo SUDO_DOCKER=\$?; curl -fsS --max-time 2 http://127.0.0.1:5000/webhook >/dev/null 2>&1; echo LOCAL_5000_WEBHOOK=\$?; curl -fsS --max-time 2 http://127.0.0.1:8080 >/dev/null 2>&1; echo LOCAL_8080=\$?; count=\$(find \"\$HOME\" /opt /srv /root -maxdepth 8 -type f \( -name bot_logic.py -o -name bot_presentation.py \) 2>/dev/null | wc -l | tr -d ' '); echo BOT_FILES_COUNT=\$count; compose_count=\$(find \"\$HOME\" /opt /srv /root -maxdepth 8 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null | xargs -r grep -l 'bot_backend:' 2>/dev/null | wc -l | tr -d ' '); echo BOT_COMPOSE_COUNT=\$compose_count"
-              done
-            done
-          done
-          test "$found" -eq 1
+      - name: Inspect Rapidito production read-only
+        env:
+          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/rapidito -p "$BOT_VPS_PORT" -o BatchMode=yes -o ConnectTimeout=10 "$BOT_VPS_USER@$BOT_VPS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          cd "$APP"
+          echo "HOST=$(hostname)"
+          echo "USER=$(whoami)"
+          test -f docker-compose.yml
+          test -f .env
+          test -f bot_logic.py
+          echo 'APP_LAYOUT_OK=1'
+          docker --version
+          docker compose version
+          docker compose ps
+          docker ps --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}}'
+          echo '--- BOT HEALTH ---'
+          curl -fsS --max-time 5 http://127.0.0.1:5000/webhook || true
+          echo
+          echo '--- EVOLUTION ROOT ---'
+          curl -fsS --max-time 5 http://127.0.0.1:8080/ || true
+          echo
+          set -a
+          source .env
+          set +a
+          [[ -n "${EVO_API_KEY:-}" ]] && echo 'EVO_API_KEY=SET' || echo 'EVO_API_KEY=MISSING'
+          [[ -n "${WISPHUB_API_KEY:-}" ]] && echo 'WISPHUB_API_KEY=SET' || echo 'WISPHUB_API_KEY=MISSING'
+          echo "INSTANCE_NAME=${INSTANCE_NAME:-rapidito_bot}"
+          if [[ -n "${EVO_API_KEY:-}" ]]; then
+            code=$(curl -sS --max-time 8 -o /tmp/rapidito_instances.json -w '%{http_code}' -H "apikey: $EVO_API_KEY" http://127.0.0.1:8080/instance/fetchInstances || true)
+            echo "EVOLUTION_INSTANCES_HTTP=$code"
+            if [[ "$code" == "200" ]]; then
+              grep -o '"instanceName"[^,}]*\|"state"[^,}]*\|"connectionStatus"[^,}]*' /tmp/rapidito_instances.json | head -30 || true
+            fi
+          fi
+          REMOTE
