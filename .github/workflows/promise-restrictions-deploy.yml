@@ -14,6 +14,7 @@ on:
       - 'vps/set_webhook.py'
       - 'vps/get_qr.py'
       - 'vps/reset_whatsapp.sh'
+      - 'vps/deploy_bot_local.sh'
       - '.github/workflows/promise-restrictions-deploy.yml'
   pull_request:
     branches: [main]
@@ -28,6 +29,7 @@ on:
       - 'vps/set_webhook.py'
       - 'vps/get_qr.py'
       - 'vps/reset_whatsapp.sh'
+      - 'vps/deploy_bot_local.sh'
       - '.github/workflows/promise-restrictions-deploy.yml'
 
 permissions:
@@ -54,6 +56,7 @@ jobs:
             vps/set_webhook.py \
             vps/get_qr.py
           bash -n vps/reset_whatsapp.sh
+          bash -n vps/deploy_bot_local.sh
           cd vps
           python -m unittest test_bot_flows.py
 
