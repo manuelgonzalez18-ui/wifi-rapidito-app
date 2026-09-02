@@ -10,6 +10,7 @@ on:
       - 'vps/bot_logic.py'
       - 'vps/bot_flows.py'
       - 'vps/test_bot_flows.py'
+      - 'vps/test_bot_conversation.py'
       - 'vps/validate_bot_env.py'
       - 'vps/set_webhook.py'
       - 'vps/get_qr.py'
@@ -25,6 +26,7 @@ on:
       - 'vps/bot_logic.py'
       - 'vps/bot_flows.py'
       - 'vps/test_bot_flows.py'
+      - 'vps/test_bot_conversation.py'
       - 'vps/validate_bot_env.py'
       - 'vps/set_webhook.py'
       - 'vps/get_qr.py'
@@ -54,11 +56,13 @@ jobs:
             vps/bot_logic.py \
             vps/validate_bot_env.py \
             vps/set_webhook.py \
-            vps/get_qr.py
+            vps/get_qr.py \
+            vps/test_bot_flows.py \
+            vps/test_bot_conversation.py
           bash -n vps/reset_whatsapp.sh
           bash -n vps/deploy_bot_local.sh
           cd vps
-          python -m unittest test_bot_flows.py
+          python -m unittest test_bot_flows.py test_bot_conversation.py
 
       - name: Configure Hostinger SSH
         if: github.event_name == 'push'
