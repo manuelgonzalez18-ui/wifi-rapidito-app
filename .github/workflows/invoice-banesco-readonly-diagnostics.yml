@@ -1,0 +1,170 @@
+name: Invoice and Banesco Readonly Diagnostics
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/invoice-banesco-readonly-diagnostics.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Inspect WispHub invoices and Banesco contract safely
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          test -s "$BASE/config_wisphub.php"
+          test -s "$BASE/proxy_invoices.php"
+          test -s "$BASE/banesco_api.php"
+
+          cat > /tmp/rapidito_invoice_diag.php <<'PHP'
+          <?php
+          $base = $argv[1];
+          require $base . '/config_wisphub.php';
+
+          function fetchW($path, $params = []) {
+              $url = rtrim(WISPHUB_API_URL, '/') . '/' . ltrim($path, '/');
+              if ($params) $url .= (str_contains($url, '?') ? '&' : '?') . http_build_query($params);
+              $ch = curl_init($url);
+              curl_setopt_array($ch, [
+                  CURLOPT_RETURNTRANSFER => true,
+                  CURLOPT_FOLLOWLOCATION => true,
+                  CURLOPT_CONNECTTIMEOUT => 8,
+                  CURLOPT_TIMEOUT => 20,
+                  CURLOPT_SSL_VERIFYPEER => true,
+                  CURLOPT_SSL_VERIFYHOST => 2,
+                  CURLOPT_HTTPHEADER => [
+                      'Authorization: Api-Key ' . WISPHUB_TOKEN,
+                      'Accept: application/json',
+                  ],
+              ]);
+              $raw = curl_exec($ch);
+              $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+              $err = curl_error($ch);
+              curl_close($ch);
+              return [$code, $err, json_decode((string)$raw, true)];
+          }
+
+          function scalar($v) {
+              if (is_array($v)) {
+                  foreach (['id_servicio','id_cliente','id','pk'] as $k) if (isset($v[$k]) && !is_array($v[$k])) return (string)$v[$k];
+                  return '';
+              }
+              return is_scalar($v) ? (string)$v : '';
+          }
+
+          function sig($inv) {
+              if (!is_array($inv)) return [];
+              $artSvc = [];
+              foreach (($inv['articulos'] ?? []) as $a) {
+                  if (is_array($a)) {
+                      $v = $a['servicio']['id_servicio'] ?? $a['id_servicio'] ?? null;
+                      if ($v !== null) $artSvc[] = scalar($v);
+                  }
+              }
+              return [
+                  'id' => (string)($inv['id_factura'] ?? $inv['id'] ?? ''),
+                  'folio' => (string)($inv['folio'] ?? ''),
+                  'estado' => (string)($inv['estado'] ?? ''),
+                  'total' => (string)($inv['total'] ?? ''),
+                  'id_servicio' => scalar($inv['id_servicio'] ?? ''),
+                  'servicio' => scalar($inv['servicio'] ?? ''),
+                  'id_cliente' => scalar($inv['id_cliente'] ?? ''),
+                  'cliente' => scalar($inv['cliente'] ?? ''),
+                  'cliente_id_cliente' => is_array($inv['cliente'] ?? null) ? scalar($inv['cliente']['id_cliente'] ?? '') : '',
+                  'articulos_servicios' => array_values(array_unique(array_filter($artSvc))),
+                  'keys' => array_values(array_slice(array_keys($inv), 0, 30)),
+              ];
+          }
+
+          $tests = [
+              'id_servicio_412' => ['facturas/', ['id_servicio' => '412', 'limit' => 50]],
+              'servicio_412' => ['facturas/', ['servicio' => '412', 'limit' => 50]],
+              'search_9604' => ['facturas/', ['search' => '9604', 'limit' => 20]],
+              'direct_9604' => ['facturas/9604/', []],
+          ];
+
+          echo "=== WispHub direct read-only ===\n";
+          foreach ($tests as $name => [$path, $params]) {
+              [$code, $err, $data] = fetchW($path, $params);
+              $items = [];
+              if (is_array($data) && isset($data['results']) && is_array($data['results'])) $items = $data['results'];
+              elseif (is_array($data) && (isset($data['id_factura']) || isset($data['id']))) $items = [$data];
+              echo $name . '_http=' . $code . "\n";
+              echo $name . '_curl_error=' . ($err ? 'yes' : 'no') . "\n";
+              echo $name . '_count=' . count($items) . "\n";
+              echo $name . '_top_keys=' . (is_array($data) ? implode(',', array_slice(array_keys($data), 0, 20)) : 'non_json') . "\n";
+              foreach (array_slice($items, 0, 3) as $i => $inv) {
+                  echo $name . '_item' . $i . '=' . json_encode(sig($inv), JSON_UNESCAPED_SLASHES) . "\n";
+              }
+          }
+
+          echo "=== Banesco checkTransaction contract (no bank call) ===\n";
+          require $base . '/banesco_api.php';
+          $ref = new ReflectionClass('BanescoAPI');
+          $m = $ref->getMethod('checkTransaction');
+          $lines = file($base . '/banesco_api.php');
+          $bodyLines = array_slice($lines, $m->getStartLine() - 1, $m->getEndLine() - $m->getStartLine() + 1);
+          foreach ($bodyLines as $n => $line) {
+              if (!preg_match('/reference|accountId|amount|startDt|endDt|phoneNum|bankId|success|status|http|response|message|code/i', $line)) continue;
+              $line = preg_replace('/([\'\"])(?:(?!\1).)*\1/', "'<redacted>'", $line);
+              $line = preg_replace('/\s+/', ' ', trim($line));
+              echo 'banesco_line_' . ($m->getStartLine() + $n) . '=' . $line . "\n";
+          }
+          PHP
+
+          php /tmp/rapidito_invoice_diag.php "$BASE"
+          rm -f /tmp/rapidito_invoice_diag.php
+
+          echo '=== Public proxy_invoices read-only ==='
+          for qs in 'id_servicio=412&limit=50' 'servicio=412&limit=50' 'search=9604&limit=20'; do
+            raw="$(curl -fsS --max-time 45 "https://wifirapidito.com/proxy_invoices.php?$qs" || true)"
+            php -r '
+              $q=$argv[1]; $d=json_decode($argv[2], true);
+              echo "query=".$q."\n";
+              if (!is_array($d)) { echo "json=no\n"; exit; }
+              echo "json=yes\ncount=".(int)($d["count"] ?? count($d["results"] ?? []))."\n";
+              foreach (array_slice($d["results"] ?? [],0,3) as $x) {
+                echo "item=".json_encode([
+                  "id"=>$x["id_factura"]??$x["id"]??"",
+                  "folio"=>$x["folio"]??"",
+                  "estado"=>$x["estado"]??"",
+                  "total"=>$x["total"]??"",
+                  "match"=>$x["debug_match_by"]??""
+                ], JSON_UNESCAPED_SLASHES)."\n";
+              }
+            ' "$qs" "$raw"
+          done
+
+          echo '=== Live proxy fingerprint ==='
+          php -l "$BASE/proxy_invoices.php" >/dev/null
+          sha256sum "$BASE/proxy_invoices.php" | awk '{print "proxy_invoices_sha256=" $1}'
+          REMOTE
