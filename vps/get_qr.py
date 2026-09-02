@@ -1,32 +1,36 @@
-import requests
-import time
 import os
+import requests
 
-# Configuración
-API_URL = "http://localhost:8080"
-INSTANCE = "rapidito_bot"
-API_KEY = "rapidito_key_2026"
+API_URL = os.getenv("EVO_API_URL", "http://localhost:8080").rstrip("/")
+INSTANCE = os.getenv("INSTANCE_NAME", "rapidito_bot")
+API_KEY = os.getenv("EVO_API_KEY", "")
+
 
 def get_qr():
+    if not API_KEY:
+        raise SystemExit("EVO_API_KEY no está configurada. No se consultó Evolution API.")
+
     print(f"\n--- Intentando obtener QR de la instancia: {INSTANCE} ---")
     url = f"{API_URL}/instance/connect/{INSTANCE}"
     headers = {"apikey": API_KEY}
-    
+
     try:
-        # Intentamos forzar la generación del QR
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=15)
         if response.status_code == 200:
-            print("\n¡QR Generado con éxito!")
-            print("Escanea este código con tu WhatsApp:")
-            print("(Si no ves un código claro, abre este link en tu PC lo más rápido posible):")
-            # En realidad, Evolution API devuelve el QR en el HTML.
-            # Como no podemos renderizar HTML fácil, vamos a usar el endpoint de base64 si existe
-            # o simplemente pedirle al usuario que use la IP directa tras un último intento de firewall.
+            print("\n✅ Respuesta de conexión obtenida.")
+            try:
+                payload = response.json()
+                print(payload)
+            except ValueError:
+                print(response.text)
         else:
-            print(f"Error: {response.status_code}")
+            print(f"❌ Error: {response.status_code}")
             print(response.text)
-    except Exception as e:
-        print(f"Error de conexión: {e}")
+            raise SystemExit(1)
+    except requests.RequestException as exc:
+        print(f"❌ Error de conexión: {exc}")
+        raise SystemExit(1) from exc
+
 
 if __name__ == "__main__":
     get_qr()
