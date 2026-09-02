@@ -1,0 +1,151 @@
+name: Bot VPS Deploy Reconstruction
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-vps-deploy-reconstruction.yml'
+      - 'vps/DEPLOY_RECONSTRUCTION_TRIGGER'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+    steps:
+      - name: Configure verified SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+          echo 'SSH_READY=1'
+
+      - name: Swap only bot_backend with automatic rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          STAGED_FILE=/root/rapidito-staged-image
+          test -s "$STAGED_FILE"
+          IMAGE=$(cat "$STAGED_FILE")
+          docker image inspect "$IMAGE" >/dev/null
+          echo "STAGED_IMAGE=$IMAGE"
+
+          # Preconditions: production is currently healthy and dependencies stay running.
+          old_health=$(curl -fsS http://127.0.0.1:5000/webhook)
+          printf '%s' "$old_health" | grep -q '"status":"ok"'
+          docker inspect -f '{{.State.Running}}' evolution_api | grep -q true
+          docker inspect -f '{{.State.Running}}' redis_bot | grep -q true
+          echo 'PRECONDITIONS_OK=1'
+
+          # Preserve a private, exact environment snapshot for rollback/audit without logging values.
+          stamp=$(date +%Y%m%d-%H%M%S)
+          SAFE=/root/rapidito-deploy-$stamp
+          mkdir -p "$SAFE"
+          chmod 700 "$SAFE"
+          docker inspect bot_backend > "$SAFE/bot_backend-before.json"
+          docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend > "$SAFE/bot_backend-before.env"
+          chmod 600 "$SAFE/bot_backend-before.env"
+          printf '%s\n' "$IMAGE" > "$SAFE/staged-image"
+
+          OLD="bot_backend_predeploy_$stamp"
+          rollback() {
+            echo 'ROLLBACK_BEGIN=1'
+            docker rm -f bot_backend >/dev/null 2>&1 || true
+            if docker inspect "$OLD" >/dev/null 2>&1; then
+              docker rename "$OLD" bot_backend >/dev/null 2>&1 || true
+              docker start bot_backend >/dev/null 2>&1 || true
+            fi
+            for i in $(seq 1 20); do
+              if curl -fsS http://127.0.0.1:5000/webhook >/tmp/rollback-health.json 2>/dev/null; then
+                echo 'ROLLBACK_HEALTH_OK=1'
+                cat /tmp/rollback-health.json
+                echo
+                return 0
+              fi
+              sleep 1
+            done
+            echo 'ROLLBACK_HEALTH_FAILED=1'
+            return 1
+          }
+
+          echo 'STOPPING_OLD_BOT=1'
+          docker stop -t 15 bot_backend >/dev/null
+          docker rename bot_backend "$OLD"
+          printf '%s\n' "$OLD" > /root/rapidito-rollback-container
+
+          set +e
+          docker run -d \
+            --name bot_backend \
+            --restart always \
+            --network public_html_default \
+            --env-file "$APP/.env" \
+            -p 5000:5000 \
+            "$IMAGE" >/tmp/new-bot-id
+          run_rc=$?
+          set -e
+          if [[ $run_rc -ne 0 ]]; then
+            echo 'NEW_CONTAINER_START_FAILED=1'
+            rollback
+            exit 31
+          fi
+
+          healthy=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/webhook >/tmp/new-health.json 2>/dev/null && \
+               grep -q '4.0-bot-10-opciones' /tmp/new-health.json && \
+               grep -q '"provider":"meta"' /tmp/new-health.json; then
+              healthy=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ "$healthy" != 1 ]]; then
+            echo 'NEW_BOT_HEALTH_FAILED=1'
+            docker logs --tail 80 bot_backend 2>&1 | sed -E 's/(Bearer |token[=: ]+|apikey[=: ]+)[^ ]+/\1[REDACTED]/Ig' || true
+            rollback
+            exit 32
+          fi
+
+          echo 'NEW_BOT_HEALTH_OK=1'
+          cat /tmp/new-health.json
+          echo
+          echo "ROLLBACK_CONTAINER=$OLD"
+          echo '--- CONTAINERS AFTER SWAP ---'
+          docker ps --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}}' | grep -E '^(bot_backend|evolution_api|redis_bot) '
+          echo '--- OLD BOT PRESERVED ---'
+          docker ps -a --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}}' | grep "^$OLD "
+          echo 'DEPLOYMENT_OK=1'
+          REMOTE
+
+      - name: Post-deploy read-only health
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          sleep 3
+          curl -fsS http://127.0.0.1:5000/webhook | grep -q '4.0-bot-10-opciones'
+          docker inspect -f '{{.State.Running}}' bot_backend | grep -q true
+          docker inspect -f '{{.State.Running}}' evolution_api | grep -q true
+          docker inspect -f '{{.State.Running}}' redis_bot | grep -q true
+          echo 'POST_DEPLOY_HEALTH_OK=1'
+          REMOTE
