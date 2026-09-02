@@ -15,8 +15,8 @@ if [[ "$MODE" != "deploy" && "$MODE" != "check" ]]; then
 fi
 
 echo "🔎 Validando sintaxis local..."
-python3 -m py_compile bot_flows.py bot_logic.py bot_entry.py validate_bot_env.py
-python3 -m unittest test_bot_flows.py test_bot_conversation.py test_bot_integrations.py
+python3 -m py_compile bot_flows.py bot_logic.py bot_entry.py bot_presentation.py validate_bot_env.py
+python3 -m unittest test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py
 bash -n reset_whatsapp.sh
 
 echo "🐳 Construyendo imagen del bot..."
@@ -33,7 +33,7 @@ fi
 stamp="$(date +%Y%m%d-%H%M%S)"
 backup_dir=".bot-backups/$stamp"
 mkdir -p "$backup_dir"
-for file in bot_logic.py bot_entry.py bot_flows.py Dockerfile.bot requirements-bot.txt validate_bot_env.py set_webhook.py get_qr.py reset_whatsapp.sh; do
+for file in bot_logic.py bot_entry.py bot_presentation.py bot_flows.py Dockerfile.bot requirements-bot.txt validate_bot_env.py set_webhook.py get_qr.py reset_whatsapp.sh; do
   [[ -f "$file" ]] && cp -a "$file" "$backup_dir/$file"
 done
 
