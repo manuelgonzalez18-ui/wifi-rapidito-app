@@ -18,7 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure Hostinger SSH
+      - name: Configure and verify Hostinger SSH
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -33,7 +33,19 @@ jobs:
           printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
           chmod 600 ~/.ssh/hostinger_deploy
           ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
-          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+          SSH_PORT=''
+          for port in 65002 22; do
+            if timeout 15 ssh -i ~/.ssh/hostinger_deploy -p "$port" \
+              -o BatchMode=yes -o ConnectTimeout=8 \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              "$HOSTINGER_USER@$HOSTINGER_HOST" 'true' >/dev/null 2>&1; then
+              SSH_PORT="$port"
+              break
+            fi
+          done
+          test -n "$SSH_PORT"
+          printf 'SSH_PORT=%s\n' "$SSH_PORT" >> "$GITHUB_ENV"
 
       - name: Discover bot directory
         env:
@@ -42,7 +54,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BOT_DIR="$(ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'find "$HOME" -maxdepth 7 -type f -name docker-compose.yml -print 2>/dev/null | while IFS= read -r f; do if grep -q "bot_backend:" "$f"; then dirname "$f"; break; fi; done')"
+          SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+          BOT_DIR="$("${SSH[@]}" "$HOSTINGER_USER@$HOSTINGER_HOST" 'find "$HOME" -maxdepth 7 -type f -name docker-compose.yml -print 2>/dev/null | while IFS= read -r f; do if grep -q "bot_backend:" "$f"; then dirname "$f"; break; fi; done')"
           test -n "$BOT_DIR"
           echo "::add-mask::$BOT_DIR"
           printf 'BOT_DIR=%s\n' "$BOT_DIR" >> "$GITHUB_ENV"
@@ -54,8 +67,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+          SCP=(scp -q -i ~/.ssh/hostinger_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
           STAGE="$BOT_DIR/.live-preflight-$GITHUB_SHA"
-          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" "mkdir -p '$STAGE'"
+          "${SSH[@]}" "$HOSTINGER_USER@$HOSTINGER_HOST" "mkdir -p '$STAGE'"
           files=(
             bot_logic.py bot_entry.py bot_presentation.py bot_flows.py
             test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py
@@ -63,10 +78,10 @@ jobs:
             requirements-bot.txt Dockerfile.bot
           )
           for file in "${files[@]}"; do
-            scp -q -i ~/.ssh/hostinger_deploy -P 65002 "vps/$file" "$HOSTINGER_USER@$HOSTINGER_HOST:$STAGE/$file"
+            "${SCP[@]}" "vps/$file" "$HOSTINGER_USER@$HOSTINGER_HOST:$STAGE/$file"
           done
 
-          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" "BOT_DIR='$BOT_DIR' STAGE='$STAGE' bash -s" <<'REMOTE'
+          "${SSH[@]}" "$HOSTINGER_USER@$HOSTINGER_HOST" "BOT_DIR='$BOT_DIR' STAGE='$STAGE' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$BOT_DIR"
           test -f .env
@@ -112,4 +127,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" "cd '$BOT_DIR' && docker compose ps bot_backend && curl -fsS http://127.0.0.1:5000/webhook"
+          SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+          "${SSH[@]}" "$HOSTINGER_USER@$HOSTINGER_HOST" "cd '$BOT_DIR' && docker compose ps bot_backend && curl -fsS http://127.0.0.1:5000/webhook"
