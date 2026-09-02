@@ -17,52 +17,61 @@ jobs:
     steps:
       - name: Configure SSH
         env:
-          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
-          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
+          BOT_VPS_SSH_KEY: ${{ secrets.BOT_VPS_SSH_KEY }}
         shell: bash
         run: |
           set -euo pipefail
+          test -n "$BOT_VPS_HOST"
+          test -n "$BOT_VPS_PORT"
+          test -n "$BOT_VPS_USER"
+          test -n "$BOT_VPS_SSH_KEY"
           mkdir -p ~/.ssh
-          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/key
+          printf '%s\n' "$BOT_VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/key
           chmod 600 ~/.ssh/key
-          hosts=("193.203.188.215")
-          if [[ -n "${HOSTINGER_HOST:-}" && "$HOSTINGER_HOST" != "193.203.188.215" ]]; then hosts+=("$HOSTINGER_HOST"); fi
-          for host in "${hosts[@]}"; do
-            for port in 65002 22; do
-              if timeout 7 ssh -i ~/.ssh/key -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOSTINGER_USER@$host" true >/dev/null 2>&1; then
-                echo "::add-mask::$host"
-                echo "TARGET_HOST=$host" >> "$GITHUB_ENV"
-                echo "SSH_PORT=$port" >> "$GITHUB_ENV"
-                exit 0
-              fi
-            done
-          done
-          exit 1
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -p "$BOT_VPS_PORT" "$BOT_VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "TARGET_HOST=$BOT_VPS_HOST" >> "$GITHUB_ENV"
+          echo "SSH_PORT=$BOT_VPS_PORT" >> "$GITHUB_ENV"
+          echo "TARGET_USER=$BOT_VPS_USER" >> "$GITHUB_ENV"
 
-      - name: Inspect runtime capabilities read-only
-        env:
-          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+      - name: Inspect Rapidito production read-only
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOSTINGER_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
-          set +e
-          for cmd in python3 python pip3 pip node npm npx pm2 screen tmux curl git; do
-            if command -v "$cmd" >/dev/null 2>&1; then
-              version="$($cmd --version 2>/dev/null | head -1)"
-              printf 'RUNTIME_%s=YES %s\n' "$(printf %s "$cmd" | tr '[:lower:]' '[:upper:]')" "$version"
-            else
-              printf 'RUNTIME_%s=NO\n' "$(printf %s "$cmd" | tr '[:lower:]' '[:upper:]')"
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          cd "$APP"
+          echo "HOST=$(hostname)"
+          echo "USER=$(whoami)"
+          test -f docker-compose.yml
+          test -f .env
+          test -f bot_logic.py
+          echo 'APP_LAYOUT_OK=1'
+          docker --version
+          docker compose version
+          docker compose ps
+          docker ps --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}}'
+          echo '--- BOT HEALTH ---'
+          curl -fsS --max-time 5 http://127.0.0.1:5000/webhook || true
+          echo
+          echo '--- EVOLUTION ROOT ---'
+          curl -fsS --max-time 5 http://127.0.0.1:8080/ || true
+          echo
+          set -a
+          source .env
+          set +a
+          [[ -n "${EVO_API_KEY:-}" ]] && echo 'EVO_API_KEY=SET' || echo 'EVO_API_KEY=MISSING'
+          [[ -n "${WISPHUB_API_KEY:-}" ]] && echo 'WISPHUB_API_KEY=SET' || echo 'WISPHUB_API_KEY=MISSING'
+          echo "INSTANCE_NAME=${INSTANCE_NAME:-rapidito_bot}"
+          if [[ -n "${EVO_API_KEY:-}" ]]; then
+            code=$(curl -sS --max-time 8 -o /tmp/rapidito_instances.json -w '%{http_code}' -H "apikey: $EVO_API_KEY" http://127.0.0.1:8080/instance/fetchInstances || true)
+            echo "EVOLUTION_INSTANCES_HTTP=$code"
+            if [[ "$code" == "200" ]]; then
+              grep -o '"instanceName"[^,}]*\|"state"[^,}]*\|"connectionStatus"[^,}]*' /tmp/rapidito_instances.json | head -30 || true
             fi
-          done
-          python3 - <<'PY' 2>/dev/null || true
-import socket
-for port in (5000, 8080, 3000):
-    s=socket.socket(); s.settimeout(.5)
-    rc=s.connect_ex(('127.0.0.1',port)); s.close()
-    print(f'PORT_{port}_LISTENING={1 if rc==0 else 0}')
-PY
-          ulimit -u 2>/dev/null | sed 's/^/ULIMIT_PROCESSES=/' || true
-          df -Pk "$HOME" 2>/dev/null | tail -1 | awk '{print "HOME_FREE_KB=" $4}'
+          fi
           REMOTE
