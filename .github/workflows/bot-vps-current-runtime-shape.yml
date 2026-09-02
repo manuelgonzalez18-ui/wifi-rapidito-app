@@ -1,0 +1,63 @@
+name: Bot VPS Current Runtime Shape
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-vps-current-runtime-shape.yml'
+      - 'vps/RUNTIME_SHAPE_TRIGGER'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+    steps:
+      - name: Configure verified SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+
+      - name: Inspect runtime shape without values
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          echo "IMAGE=$(docker inspect -f '{{.Config.Image}}' bot_backend)"
+          echo "RESTART=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' bot_backend)"
+          echo "USER=$(docker inspect -f '{{.Config.User}}' bot_backend)"
+          echo "WORKDIR=$(docker inspect -f '{{.Config.WorkingDir}}' bot_backend)"
+          echo "ENTRYPOINT=$(docker inspect -f '{{json .Config.Entrypoint}}' bot_backend)"
+          echo "CMD=$(docker inspect -f '{{json .Config.Cmd}}' bot_backend)"
+          echo '--- NETWORKS ---'
+          docker inspect -f '{{range $name, $cfg := .NetworkSettings.Networks}}{{println $name}}{{end}}' bot_backend | sed '/^$/d' | sort
+          echo '--- PORT BINDINGS ---'
+          docker inspect -f '{{json .HostConfig.PortBindings}}' bot_backend
+          echo '--- MOUNTS (type/source/destination only) ---'
+          docker inspect -f '{{range .Mounts}}{{println .Type "|" .Source "|" .Destination "|" .RW}}{{end}}' bot_backend
+          echo '--- ENV NAMES ---'
+          docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend | sed 's/=.*//' | sort -u
+          echo '--- ENV NAMES IN .env ---'
+          grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$APP/.env" | cut -d= -f1 | sort -u
+          echo '--- HEALTH ---'
+          curl -fsS http://127.0.0.1:5000/webhook
+          echo
+          REMOTE
