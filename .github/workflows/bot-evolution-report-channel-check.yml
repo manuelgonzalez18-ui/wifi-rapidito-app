@@ -48,6 +48,11 @@ jobs:
           echo "EVOLUTION_FETCH_HTTP=$code"
           test "$code" = 200
 
+          state_code=$(curl -sS --max-time 10 -o /tmp/evo-state.json -w '%{http_code}' \
+            -H "apikey: $api_key" http://127.0.0.1:8080/instance/connectionState/rapidito_bot || true)
+          echo "EVOLUTION_STATE_HTTP=$state_code"
+          test "$state_code" = 200
+
           python3 - <<'PY'
           import json
           with open('/tmp/evo-instances.json', 'r', encoding='utf-8') as f:
@@ -64,7 +69,16 @@ jobs:
                   continue
               instance = item.get('instance') if isinstance(item.get('instance'), dict) else item
               name = instance.get('instanceName') or instance.get('name') or item.get('name') or ''
-              state = instance.get('connectionStatus') or instance.get('state') or item.get('connectionStatus') or item.get('state') or ''
-              print(f'INSTANCE={name} STATE={state}')
+              print(f'INSTANCE={name}')
+
+          with open('/tmp/evo-state.json', 'r', encoding='utf-8') as f:
+              state_data = json.load(f)
+          instance = state_data.get('instance') if isinstance(state_data, dict) else {}
+          if not isinstance(instance, dict):
+              instance = {}
+          state = instance.get('state') or state_data.get('state') or state_data.get('connectionStatus') or ''
+          print('EVOLUTION_CONNECTION_STATE=' + str(state))
+          if str(state).lower() not in {'open', 'connected'}:
+              raise SystemExit('Evolution instance is not connected')
           PY
           REMOTE
