@@ -26,22 +26,58 @@ jobs:
           test -n "$BOT_VPS_HOST"
           test -n "$BOT_VPS_PORT"
           test -n "$BOT_VPS_SSH_KEY_B64"
+          echo 'SECRETS_PRESENT=1'
 
           mkdir -p ~/.ssh
           printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
           chmod 600 ~/.ssh/key
+          echo 'KEY_DECODE_OK=1'
           ssh-keygen -y -f ~/.ssh/key >/dev/null
-          ssh-keyscan -p "$BOT_VPS_PORT" "$BOT_VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo 'KEY_PARSE_OK=1'
+
+          if timeout 8 bash -c "</dev/tcp/$BOT_VPS_HOST/$BOT_VPS_PORT" 2>/dev/null; then
+            echo 'TCP22_OK=1'
+          else
+            echo 'TCP22_OK=0'
+          fi
+
+          set +e
+          timeout 10 ssh-keyscan -T 5 -p "$BOT_VPS_PORT" "$BOT_VPS_HOST" > ~/.ssh/known_hosts 2>/tmp/keyscan.err
+          keyscan_rc=$?
+          set -e
+          echo "KEYSCAN_RC=$keyscan_rc"
+          if [[ -s ~/.ssh/known_hosts ]]; then
+            echo 'KEYSCAN_KEYS=1'
+            ssh-keygen -lf ~/.ssh/known_hosts -E sha256 || true
+          else
+            echo 'KEYSCAN_KEYS=0'
+            sed -n '1,10p' /tmp/keyscan.err || true
+          fi
+
           echo "TARGET_HOST=$BOT_VPS_HOST" >> "$GITHUB_ENV"
           echo "SSH_PORT=$BOT_VPS_PORT" >> "$GITHUB_ENV"
           echo "TARGET_USER=root" >> "$GITHUB_ENV"
-          echo 'SSH_KEY_OK=1'
+
+      - name: Test SSH authentication
+        shell: bash
+        run: |
+          set +e
+          ssh -vv -i ~/.ssh/key -p "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            "$TARGET_USER@$TARGET_HOST" 'echo SSH_AUTH_OK=1; hostname; whoami' 2>&1 | \
+            grep -E 'SSH_AUTH_OK|hostname|Authentications that can continue|Offering public key|Server accepts key|Permission denied|Connection reset|Connection timed out|Connection refused|kex_exchange|Remote protocol version|Local version string|^root$|srv1293381' || true
+          rc=${PIPESTATUS[0]}
+          echo "SSH_TEST_RC=$rc"
+          exit "$rc"
 
       - name: Inspect Rapidito production read-only
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
           APP=/home/bot.local/public_html
           cd "$APP"
