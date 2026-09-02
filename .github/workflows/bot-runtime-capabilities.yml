@@ -14,19 +14,19 @@ jobs:
   capabilities:
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
     steps:
       - name: Configure SSH
         env:
-          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
-          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
           BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$BOT_VPS_HOST"
-          test -n "$BOT_VPS_PORT"
           test -n "$BOT_VPS_SSH_KEY_B64"
-          echo 'SECRETS_PRESENT=1'
+          echo 'SECRET_PRESENT=1'
 
           mkdir -p ~/.ssh
           printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
@@ -35,14 +35,14 @@ jobs:
           ssh-keygen -y -f ~/.ssh/key >/dev/null
           echo 'KEY_PARSE_OK=1'
 
-          if timeout 8 bash -c "</dev/tcp/$BOT_VPS_HOST/$BOT_VPS_PORT" 2>/dev/null; then
+          if timeout 8 bash -c "</dev/tcp/$TARGET_HOST/$SSH_PORT" 2>/dev/null; then
             echo 'TCP22_OK=1'
           else
             echo 'TCP22_OK=0'
           fi
 
           set +e
-          timeout 10 ssh-keyscan -T 5 -p "$BOT_VPS_PORT" "$BOT_VPS_HOST" > ~/.ssh/known_hosts 2>/tmp/keyscan.err
+          timeout 10 ssh-keyscan -T 5 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/tmp/keyscan.err
           keyscan_rc=$?
           set -e
           echo "KEYSCAN_RC=$keyscan_rc"
@@ -54,22 +54,19 @@ jobs:
             sed -n '1,10p' /tmp/keyscan.err || true
           fi
 
-          echo "TARGET_HOST=$BOT_VPS_HOST" >> "$GITHUB_ENV"
-          echo "SSH_PORT=$BOT_VPS_PORT" >> "$GITHUB_ENV"
-          echo "TARGET_USER=root" >> "$GITHUB_ENV"
-
       - name: Test SSH authentication
         shell: bash
         run: |
           set +e
+          out=$(mktemp)
           ssh -vv -i ~/.ssh/key -p "$SSH_PORT" \
             -o BatchMode=yes \
             -o ConnectTimeout=10 \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
-            "$TARGET_USER@$TARGET_HOST" 'echo SSH_AUTH_OK=1; hostname; whoami' 2>&1 | \
-            grep -E 'SSH_AUTH_OK|hostname|Authentications that can continue|Offering public key|Server accepts key|Permission denied|Connection reset|Connection timed out|Connection refused|kex_exchange|Remote protocol version|Local version string|^root$|srv1293381' || true
-          rc=${PIPESTATUS[0]}
+            "$TARGET_USER@$TARGET_HOST" 'echo SSH_AUTH_OK=1; hostname; whoami' >"$out" 2>&1
+          rc=$?
+          grep -E 'SSH_AUTH_OK|Authentications that can continue|Offering public key|Server accepts key|Permission denied|Connection reset|Connection timed out|Connection refused|kex_exchange|Remote protocol version|Local version string|^root$|srv1293381' "$out" || true
           echo "SSH_TEST_RC=$rc"
           exit "$rc"
 
