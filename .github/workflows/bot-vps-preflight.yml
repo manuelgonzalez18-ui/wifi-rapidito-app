@@ -1,0 +1,115 @@
+name: Bot VPS Preflight
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-vps-preflight.yml'
+      - 'vps/LIVE_PREFLIGHT_TRIGGER'
+
+permissions:
+  contents: read
+
+jobs:
+  preflight-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Discover bot directory
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOT_DIR="$(ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'find "$HOME" -maxdepth 7 -type f -name docker-compose.yml -print 2>/dev/null | while IFS= read -r f; do if grep -q "bot_backend:" "$f"; then dirname "$f"; break; fi; done')"
+          test -n "$BOT_DIR"
+          echo "::add-mask::$BOT_DIR"
+          printf 'BOT_DIR=%s\n' "$BOT_DIR" >> "$GITHUB_ENV"
+
+      - name: Stage reconstruction without restarting production
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$BOT_DIR/.live-preflight-$GITHUB_SHA"
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" "mkdir -p '$STAGE'"
+          files=(
+            bot_logic.py bot_entry.py bot_presentation.py bot_flows.py
+            test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py
+            validate_bot_env.py deploy_bot_local.sh reset_whatsapp.sh set_webhook.py get_qr.py
+            requirements-bot.txt Dockerfile.bot
+          )
+          for file in "${files[@]}"; do
+            scp -q -i ~/.ssh/hostinger_deploy -P 65002 "vps/$file" "$HOSTINGER_USER@$HOSTINGER_HOST:$STAGE/$file"
+          done
+
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" "BOT_DIR='$BOT_DIR' STAGE='$STAGE' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$BOT_DIR"
+          test -f .env
+          test -f docker-compose.yml
+          grep -q 'bot_backend:' docker-compose.yml
+          docker compose ps bot_backend
+          curl -fsS http://127.0.0.1:5000/webhook >/tmp/rapidito-health-before.json || true
+
+          backup_dir=".bot-backups/preflight-${STAGE##*-}"
+          mkdir -p "$backup_dir"
+          files=(
+            bot_logic.py bot_entry.py bot_presentation.py bot_flows.py
+            test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py
+            validate_bot_env.py deploy_bot_local.sh reset_whatsapp.sh set_webhook.py get_qr.py
+            requirements-bot.txt Dockerfile.bot
+          )
+          for file in "${files[@]}"; do
+            [[ -f "$file" ]] && cp -a "$file" "$backup_dir/$file"
+            cp -a "$STAGE/$file" "$file"
+          done
+          chmod +x deploy_bot_local.sh reset_whatsapp.sh
+
+          restore() {
+            rc=$?
+            if [[ $rc -ne 0 ]]; then
+              for file in "${files[@]}"; do
+                [[ -f "$backup_dir/$file" ]] && cp -a "$backup_dir/$file" "$file"
+              done
+            fi
+            rm -rf "$STAGE"
+            exit $rc
+          }
+          trap restore EXIT
+
+          ./deploy_bot_local.sh check
+          echo 'PRECHECK_OK=1'
+          REMOTE
+
+      - name: Confirm production bot was not restarted
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" "cd '$BOT_DIR' && docker compose ps bot_backend && curl -fsS http://127.0.0.1:5000/webhook"
