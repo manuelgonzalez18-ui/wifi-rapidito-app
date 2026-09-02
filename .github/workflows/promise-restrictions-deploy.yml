@@ -10,6 +10,7 @@ on:
       - 'vps/Dockerfile.bot'
       - 'vps/requirements-bot.txt'
       - 'vps/bot_logic.py'
+      - 'vps/bot_entry.py'
       - 'vps/bot_flows.py'
       - 'vps/test_bot_flows.py'
       - 'vps/test_bot_conversation.py'
@@ -29,6 +30,7 @@ on:
       - 'vps/Dockerfile.bot'
       - 'vps/requirements-bot.txt'
       - 'vps/bot_logic.py'
+      - 'vps/bot_entry.py'
       - 'vps/bot_flows.py'
       - 'vps/test_bot_flows.py'
       - 'vps/test_bot_conversation.py'
@@ -63,6 +65,7 @@ jobs:
           python -m py_compile \
             vps/bot_flows.py \
             vps/bot_logic.py \
+            vps/bot_entry.py \
             vps/validate_bot_env.py \
             vps/set_webhook.py \
             vps/get_qr.py \
