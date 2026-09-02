@@ -79,7 +79,38 @@ function payment_registry_claim($reference, $data = [], &$existing = null) {
     try {
         $records = payment_registry_read_unlocked();
         if (isset($records[$storageKey]) && is_array($records[$storageKey])) {
-            $existing = $records[$storageKey];
+            $existingRecord = $records[$storageKey];
+            $existing = $existingRecord;
+
+            // Una operación que Banesco verificó pero que no pudo llegar a WispHub
+            // puede reintentarse únicamente sobre la MISMA factura. Esto permite
+            // recuperar fallos técnicos sin abrir la referencia para otra deuda.
+            $existingStatus = (string) ($existingRecord['status'] ?? '');
+            $existingInvoice = (string) ($existingRecord['invoice_id'] ?? '');
+            $requestedInvoice = (string) ((is_array($data) ? ($data['invoice_id'] ?? '') : ''));
+            if ($existingStatus === 'registration_error'
+                && $existingInvoice !== ''
+                && $requestedInvoice !== ''
+                && hash_equals($existingInvoice, $requestedInvoice)) {
+                $now = date(DATE_ATOM);
+                $record = array_merge($existingRecord, is_array($data) ? $data : []);
+                $record['id'] = (string) ($existingRecord['id'] ?? bin2hex(random_bytes(8)));
+                $record['reference'] = payment_registry_normalize_reference($reference);
+                $record['reference_key'] = $referenceKey;
+                $record['status'] = 'bank_verified';
+                $record['created_at'] = (string) ($existingRecord['created_at'] ?? $now);
+                $record['updated_at'] = $now;
+                $record['validated_at'] = null;
+                $record['registration_error'] = null;
+                $record['retry_count'] = ((int) ($existingRecord['retry_count'] ?? 0)) + 1;
+                $records[$storageKey] = $record;
+                if (!payment_registry_write_unlocked($records)) {
+                    throw new RuntimeException('No se pudo actualizar el registro de pagos.');
+                }
+                $existing = null;
+                return $record;
+            }
+
             return null;
         }
 
@@ -94,9 +125,9 @@ function payment_registry_claim($reference, $data = [], &$existing = null) {
             'updated_at' => $now,
             'validated_at' => null,
             'registration_error' => null,
+            'retry_count' => 0,
         ], is_array($data) ? $data : []);
 
-        // Las llaves críticas siempre se derivan en el servidor.
         $record['reference'] = payment_registry_normalize_reference($reference);
         $record['reference_key'] = $referenceKey;
         $record['status'] = 'bank_verified';
