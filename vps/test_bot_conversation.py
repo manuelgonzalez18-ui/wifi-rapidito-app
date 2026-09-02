@@ -1,4 +1,5 @@
 import unittest
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import bot_logic as bot
@@ -14,6 +15,10 @@ IDENTITY = {
     "status": "Activo",
     "raw": {},
 }
+
+
+def fake_invoice():
+    return {"id_factura": 9150, "folio": 9150, "estado": "Pendiente"}
 
 
 class BotConversationTests(unittest.IsolatedAsyncioTestCase):
@@ -59,6 +64,31 @@ class BotConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("comunidad", text.lower())
         self.assertNotIn("MAC", text)
 
+    async def test_falla_masiva_crea_ticket_real_y_reporte_sin_mac(self):
+        state = bot.state_for(PHONE)
+        state["mode"] = "CLIENT_MENU"
+        state["identity"] = dict(IDENTITY)
+        send = AsyncMock(return_value=True)
+        create_ticket = AsyncMock(return_value=("1652", {"id_ticket": 1652}))
+        admin = AsyncMock(return_value=True)
+
+        with patch.object(bot, "enviar_whatsapp", send), \
+             patch.object(bot, "create_support_ticket", create_ticket), \
+             patch.object(bot, "send_admin_report", admin):
+            await bot.process_user_message(PHONE, "7")
+            await bot.process_user_message(PHONE, "Prado Largo")
+            await bot.process_user_message(PHONE, "NO")
+            await bot.process_user_message(PHONE, "La comunidad completa está sin servicio")
+
+        create_ticket.assert_awaited_once()
+        _, option, ticket_data = create_ticket.await_args.args
+        self.assertEqual(option, "7")
+        self.assertNotIn("mac", ticket_data)
+        report = admin.await_args.args[0]
+        self.assertIn("#1652", report)
+        self.assertNotIn("MAC:", report)
+        self.assertTrue(any("#1652" in call.args[1] for call in send.await_args_list))
+
     async def test_cambio_clave_respeta_tres_pasos_y_confirmacion(self):
         state = bot.state_for(PHONE)
         state["mode"] = "CLIENT_MENU"
@@ -79,6 +109,30 @@ class BotConversationTests(unittest.IsolatedAsyncioTestCase):
             await bot.process_user_message(PHONE, "Clave.2026$")
             self.assertEqual(state["mode"], "PASSWORD_CONFIRM")
             self.assertIn("Confirma tu solicitud", send.await_args.args[1])
+
+    async def test_cambio_clave_usa_numero_real_wisphub(self):
+        state = bot.state_for(PHONE)
+        state["mode"] = "PASSWORD_CONFIRM"
+        state["identity"] = dict(IDENTITY)
+        state["data"] = {
+            "mac": "4C:D7:C8:6A:F2:50",
+            "community": "Prado Largo",
+            "new_password": "Clave.2026$",
+        }
+        send = AsyncMock(return_value=True)
+        create_ticket = AsyncMock(return_value=("1455", {"id_ticket": 1455}))
+        admin = AsyncMock(return_value=True)
+
+        with patch.object(bot, "enviar_whatsapp", send), \
+             patch.object(bot, "create_password_ticket", create_ticket), \
+             patch.object(bot, "send_admin_report", admin):
+            await bot.process_user_message(PHONE, "SI")
+
+        report = admin.await_args.args[0]
+        self.assertIn("#1455", report)
+        self.assertIn("ID Servicio: 579", report)
+        self.assertTrue(any("#1455" in call.args[1] for call in send.await_args_list))
+        self.assertEqual(state["mode"], "CLIENT_MENU")
 
     async def test_estado_servicio_no_crea_ticket(self):
         state = bot.state_for(PHONE)
@@ -108,6 +162,53 @@ class BotConversationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(state["mode"], "CLIENT_MENU")
         self.assertIn("No tienes facturas pendientes", send.await_args.args[1])
+
+    async def test_pago_no_verificado_va_a_revision_manual(self):
+        state = bot.state_for(PHONE)
+        state["mode"] = "PAYMENT_CONFIRM"
+        state["identity"] = dict(IDENTITY)
+        state["data"] = {
+            "invoice": fake_invoice(),
+            "method": "2",
+            "method_label": "Pago Móvil Otros Bancos → Banesco",
+            "origin_bank_code": "0102",
+            "origin_bank_name": "Banco de Venezuela",
+            "sender_phone": "584241382174",
+            "reference": "833634",
+            "amount": Decimal("19450.00"),
+            "payment_date": "2026-08-22",
+        }
+        send = AsyncMock(return_value=True)
+        validate = AsyncMock(return_value=(False, {"message": "No se encontró la operación"}))
+        admin = AsyncMock(return_value=True)
+
+        with patch.object(bot, "enviar_whatsapp", send), \
+             patch.object(bot, "register_verified_payment", validate), \
+             patch.object(bot, "send_admin_report", admin):
+            await bot.process_user_message(PHONE, "SI")
+
+        validate.assert_awaited_once()
+        report = admin.await_args.args[0]
+        self.assertIn("Pago NO verificado", report)
+        self.assertIn("833634", report)
+        self.assertTrue(any("revisión manual" in call.args[1] for call in send.await_args_list))
+        self.assertEqual(state["mode"], "CLIENT_MENU")
+
+    async def test_promesa_cancelada_no_registra_en_wisphub(self):
+        state = bot.state_for(PHONE)
+        state["mode"] = "PROMISE_CONFIRM"
+        state["identity"] = dict(IDENTITY)
+        state["data"] = {"invoice": fake_invoice(), "deadline": "2026-09-05"}
+        send = AsyncMock(return_value=True)
+        register = AsyncMock()
+
+        with patch.object(bot, "enviar_whatsapp", send), \
+             patch.object(bot, "register_promise", register):
+            await bot.process_user_message(PHONE, "NO")
+
+        register.assert_not_awaited()
+        self.assertEqual(state["mode"], "CLIENT_MENU")
+        self.assertIn("Promesa cancelada", send.await_args.args[1])
 
 
 if __name__ == "__main__":
