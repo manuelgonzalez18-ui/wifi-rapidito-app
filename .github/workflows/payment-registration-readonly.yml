@@ -1,4 +1,4 @@
-# Read-only check after bank verification
+# Read-only diagnostics for one payment registration case
 name: Payment Registration Readonly
 
 on:
@@ -32,7 +32,7 @@ jobs:
           done
           test -s ~/.ssh/known_hosts
 
-      - name: Inspect payment registration state without writes
+      - name: Inspect invoice 9501 and active proxy without writes
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -43,39 +43,86 @@ jobs:
           BASE="$HOME/domains/wifirapidito.com/public_html"
           PRIVATE="$(dirname "$BASE")/.wifi-rapidito-private"
           STORE="$PRIVATE/validated-payments.json"
-          echo '=== Payment registry ==='
-          if [ ! -f "$STORE" ]; then echo 'registry_present=no'; exit 0; fi
-          echo 'registry_present=yes'
-          php -r '
-            $d=json_decode((string)file_get_contents($argv[1]),true); if(!is_array($d)){echo "registry_valid=no\n";exit;}
-            echo "registry_valid=yes\nregistry_count=".count($d)."\n";
-            $rows=array_values(array_filter($d,"is_array"));
-            usort($rows,fn($a,$b)=>strcmp((string)($b["updated_at"]??""),(string)($a["updated_at"]??"")));
-            foreach(array_slice($rows,0,5) as $i=>$r){
-              echo "record_$i=".json_encode([
-                "status"=>$r["status"]??"",
-                "source"=>$r["source"]??"",
-                "invoice_id"=>$r["invoice_id"]??"",
-                "amount_bs"=>$r["amount_bs"]??"",
-                "payment_date"=>$r["payment_date"]??"",
-                "method"=>$r["payment_method"]??"",
-                "registration_error"=>$r["registration_error"]??null,
-                "created_at"=>$r["created_at"]??"",
-                "updated_at"=>$r["updated_at"]??"",
-                "validated_at"=>$r["validated_at"]??null
-              ],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n";
-            }
-          ' "$STORE"
-          echo '=== WispHub invoice 9604 after attempt ==='
-          cat > /tmp/check_invoice.php <<'PHP'
+
+          echo '=== Active payment proxy ==='
+          php -l "$BASE/proxy_payments.php" >/dev/null && echo 'proxy_php=ok'
+          grep -q "'/facturas/' .* '/registrar-pago/'" "$BASE/proxy_payments.php" && echo 'register_route=invoice-first' || echo 'register_route=unknown'
+          grep -o "version' => '[^']*" "$BASE/proxy_payments.php" | head -1 | sed "s/.*version' => '/proxy_version=/" || true
+          if [ -f "$BASE/payment-feature-version.txt" ]; then printf 'deployed_commit='; cat "$BASE/payment-feature-version.txt"; echo; fi
+
+          echo '=== Registry rows for invoice 9501 ==='
+          if [ -f "$STORE" ]; then
+            php -r '
+              $d=json_decode((string)file_get_contents($argv[1]),true); if(!is_array($d)){echo "registry_valid=no\n";exit;}
+              $rows=array_values(array_filter($d,fn($r)=>is_array($r) && (string)($r["invoice_id"]??"")==="9501"));
+              echo "invoice_9501_records=".count($rows)."\n";
+              foreach($rows as $i=>$r){
+                echo "record_$i=".json_encode([
+                  "status"=>$r["status"]??"",
+                  "source"=>$r["source"]??"",
+                  "invoice_id"=>$r["invoice_id"]??"",
+                  "amount_bs"=>$r["amount_bs"]??"",
+                  "invoice_total"=>$r["invoice_total"]??"",
+                  "payment_date"=>$r["payment_date"]??"",
+                  "method"=>$r["payment_method"]??"",
+                  "origin_bank"=>$r["origin_bank"]??"",
+                  "registration_error"=>$r["registration_error"]??null,
+                  "created_at"=>$r["created_at"]??"",
+                  "updated_at"=>$r["updated_at"]??"",
+                  "validated_at"=>$r["validated_at"]??null
+                ],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n";
+              }
+            ' "$STORE"
+          else
+            echo 'registry_present=no'
+          fi
+
+          echo '=== WispHub invoice 9501 read-only ==='
+          cat > /tmp/check_invoice_9501.php <<'PHP'
           <?php
           $base=$argv[1]; require $base.'/config_wisphub.php';
-          $url=rtrim(WISPHUB_API_URL,'/').'/facturas/9604/';
-          $ch=curl_init($url);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_HTTPHEADER=>['Authorization: Api-Key '.WISPHUB_TOKEN,'Accept: application/json']]);
-          $raw=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);$d=json_decode((string)$raw,true);
+          $url=rtrim(WISPHUB_API_URL,'/').'/facturas/9501/';
+          $ch=curl_init($url);
+          curl_setopt_array($ch,[
+            CURLOPT_RETURNTRANSFER=>true,
+            CURLOPT_TIMEOUT=>20,
+            CURLOPT_SSL_VERIFYPEER=>true,
+            CURLOPT_SSL_VERIFYHOST=>2,
+            CURLOPT_HTTPHEADER=>['Authorization: Api-Key '.WISPHUB_TOKEN,'Accept: application/json']
+          ]);
+          $raw=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);$err=curl_error($ch);curl_close($ch);
           echo "invoice_http=$code\n";
-          if(is_array($d)) echo 'invoice_state='.json_encode(['id'=>$d['id_factura']??$d['id']??'','estado'=>$d['estado']??'','total'=>$d['total']??'','total_cobrado'=>$d['total_cobrado']??'','fecha_pago'=>$d['fecha_pago']??null],JSON_UNESCAPED_SLASHES)."\n";
+          if($err!=='') echo "invoice_curl_error=yes\n";
+          $d=json_decode((string)$raw,true);
+          if(is_array($d)){
+            $cliente=is_array($d['cliente']??null)?$d['cliente']:[];
+            $forma=is_array($d['forma_pago']??null)?$d['forma_pago']:[];
+            echo 'invoice_state='.json_encode([
+              'id'=>$d['id_factura']??$d['id']??'',
+              'estado'=>$d['estado']??'',
+              'saldo'=>$d['saldo']??null,
+              'saldo_nuevo'=>$d['saldo_nuevo']??null,
+              'total'=>$d['total']??null,
+              'total_cobrado'=>$d['total_cobrado']??null,
+              'fecha_pago'=>$d['fecha_pago']??null,
+              'cliente_usuario'=>$cliente['usuario']??'',
+              'cliente_nombre'=>$cliente['nombre']??'',
+              'forma_pago_id'=>$forma['id']??null,
+              'forma_pago_nombre'=>$forma['nombre']??''
+            ],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n";
+          } else {
+            echo 'invoice_json=no\n';
+            echo 'invoice_body_prefix='.substr(preg_replace('/\s+/',' ',(string)$raw),0,240)."\n";
+          }
           PHP
-          php /tmp/check_invoice.php "$BASE"
-          rm -f /tmp/check_invoice.php
+          php /tmp/check_invoice_9501.php "$BASE"
+          rm -f /tmp/check_invoice_9501.php
+
+          echo '=== Recent PHP/web log hints for invoice 9501 (read-only) ==='
+          for f in "$BASE/error_log" "$HOME/domains/wifirapidito.com/logs/error.log" "$HOME/domains/wifirapidito.com/logs/error_log"; do
+            if [ -f "$f" ]; then
+              echo "log_file=$(basename "$f")"
+              grep -E '9501|WispHub no pudo registrar|registrar-pago' "$f" | tail -20 | sed -E 's/[0-9]{10,}/[redacted]/g' || true
+            fi
+          done
           REMOTE
