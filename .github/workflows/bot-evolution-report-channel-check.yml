@@ -41,7 +41,7 @@ jobs:
           actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
           test "$actual_fp" = "$EXPECTED_HOST_FP"
 
-      - name: Update admin report number in production
+      - name: Verify admin report number in production
         shell: bash
         run: |
           set -euo pipefail
@@ -49,56 +49,71 @@ jobs:
           set -euo pipefail
           NEW_ADMIN_REPORT_NUMBER='584242268245'
           test "$(docker inspect -f '{{.State.Running}}' bot_backend)" = true
-          image=$(docker inspect -f '{{.Config.Image}}' bot_backend)
-          restart=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' bot_backend)
-          network=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' bot_backend)
-          test -n "$image"
-          test -n "$network"
-
           current=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend | sed -n 's/^ADMIN_REPORT_NUMBER=//p' | head -1)
-          if [ "$current" = "$NEW_ADMIN_REPORT_NUMBER" ]; then
-            echo 'ADMIN_REPORT_NUMBER_ALREADY_CORRECT=1'
-          else
-            envfile=$(mktemp /root/rapidito-env.XXXXXX)
-            chmod 600 "$envfile"
-            docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend \
-              | grep -v '^ADMIN_REPORT_NUMBER=' > "$envfile"
-            printf 'ADMIN_REPORT_NUMBER=%s\n' "$NEW_ADMIN_REPORT_NUMBER" >> "$envfile"
+          test "$current" = "$NEW_ADMIN_REPORT_NUMBER"
+          curl -fsS http://127.0.0.1:5000/webhook | grep -q '4.0-bot-10-opciones'
+          echo 'ADMIN_REPORT_NUMBER_VERIFIED=1'
+          REMOTE
 
-            old_name="bot_backend_reportnum_$(date +%Y%m%d-%H%M%S)"
-            docker rename bot_backend "$old_name"
-            docker stop "$old_name" >/dev/null
+      - name: Send controlled admin report test through Meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          envdump=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend)
+          token=$(printf '%s\n' "$envdump" | sed -n 's/^META_ACCESS_TOKEN=//p' | head -1)
+          phone_id=$(printf '%s\n' "$envdump" | sed -n 's/^META_PHONE_NUMBER_ID=//p' | head -1)
+          graph_ver=$(printf '%s\n' "$envdump" | sed -n 's/^META_GRAPH_VERSION=//p' | head -1)
+          admin=$(printf '%s\n' "$envdump" | sed -n 's/^ADMIN_REPORT_NUMBER=//p' | head -1)
+          graph_ver=${graph_ver:-v23.0}
+          test -n "$token"
+          test -n "$phone_id"
+          test "$admin" = '584242268245'
 
-            rollback() {
-              docker rm -f bot_backend >/dev/null 2>&1 || true
-              docker rename "$old_name" bot_backend >/dev/null 2>&1 || true
-              docker start bot_backend >/dev/null 2>&1 || true
-              rm -f "$envfile"
-            }
-            trap rollback ERR
+          python3 - "$admin" > /tmp/meta-admin-test-payload.json <<'PY'
+          import json, sys
+          print(json.dumps({
+              'messaging_product': 'whatsapp',
+              'recipient_type': 'individual',
+              'to': sys.argv[1],
+              'type': 'text',
+              'text': {
+                  'preview_url': False,
+                  'body': '🧪 Prueba de reportes internos Rapidito 4.0\n\nDestino de reportes actualizado correctamente.'
+              }
+          }, ensure_ascii=False))
+          PY
 
-            docker run -d \
-              --name bot_backend \
-              --restart "$restart" \
-              --network "$network" \
-              -p 5000:5000 \
-              --env-file "$envfile" \
-              "$image" >/dev/null
+          code=$(curl -sS --max-time 15 -o /tmp/meta-admin-test-response.json -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' \
+            --data-binary @/tmp/meta-admin-test-payload.json \
+            "https://graph.facebook.com/$graph_ver/$phone_id/messages" || true)
+          echo "META_ADMIN_REPORT_TEST_HTTP=$code"
 
-            for i in {1..30}; do
-              if curl -fsS http://127.0.0.1:5000/webhook 2>/dev/null | grep -q '4.0-bot-10-opciones'; then
-                break
-              fi
-              sleep 1
-            done
-            curl -fsS http://127.0.0.1:5000/webhook | grep -q '4.0-bot-10-opciones'
-            actual=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend | sed -n 's/^ADMIN_REPORT_NUMBER=//p' | head -1)
-            test "$actual" = "$NEW_ADMIN_REPORT_NUMBER"
-            printf '%s\n' "$old_name" > /root/rapidito-report-number-rollback-container
-            rm -f "$envfile"
-            trap - ERR
-            echo 'ADMIN_REPORT_NUMBER_UPDATED=1'
-          fi
+          python3 - "$code" <<'PY'
+          import json, sys
+          code = sys.argv[1]
+          try:
+              with open('/tmp/meta-admin-test-response.json', 'r', encoding='utf-8') as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+          if code.startswith('2'):
+              messages = data.get('messages') if isinstance(data, dict) else None
+              accepted = bool(messages and isinstance(messages, list) and messages[0].get('id'))
+              print('META_ADMIN_REPORT_TEST_ACCEPTED=' + ('1' if accepted else '0'))
+          else:
+              err = data.get('error') if isinstance(data, dict) else {}
+              if not isinstance(err, dict):
+                  err = {}
+              print('META_ADMIN_REPORT_TEST_ACCEPTED=0')
+              print('META_ERROR_CODE=' + str(err.get('code', '')))
+              print('META_ERROR_SUBCODE=' + str(err.get('error_subcode', '')))
+              msg = str(err.get('message', '')).replace('\n', ' ')[:240]
+              print('META_ERROR_MESSAGE=' + msg)
+          PY
           REMOTE
 
       - name: Check Evolution connection without exposing credentials
