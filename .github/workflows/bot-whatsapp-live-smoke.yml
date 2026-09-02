@@ -24,12 +24,19 @@ jobs:
       - name: Send harmless live WhatsApp smoke message
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          META_ACCESS_TOKEN_SECRET: ${{ secrets.META_ACCESS_TOKEN }}
+          META_PHONE_NUMBER_ID_SECRET: ${{ secrets.META_PHONE_NUMBER_ID }}
         shell: bash
         run: |
           set -euo pipefail
           set -a
           source vps/.env
           set +a
+
+          if [[ -n "${META_ACCESS_TOKEN_SECRET:-}" && -n "${META_PHONE_NUMBER_ID_SECRET:-}" ]]; then
+            export META_ACCESS_TOKEN="$META_ACCESS_TOKEN_SECRET"
+            export META_PHONE_NUMBER_ID="$META_PHONE_NUMBER_ID_SECRET"
+          fi
 
           # Para la prueba desde GitHub usamos Meta directamente cuando las
           # credenciales existen. Evolution solo es alcanzable dentro del VPS.
