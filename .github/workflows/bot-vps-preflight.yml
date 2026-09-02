@@ -18,7 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure and verify Hostinger SSH
+      - name: Configure and verify bot VPS SSH
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -26,7 +26,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$HOSTINGER_HOST"
           test -n "$HOSTINGER_USER"
           test -n "$HOSTINGER_SSH_KEY"
           mkdir -p ~/.ssh
@@ -34,35 +33,46 @@ jobs:
           chmod 600 ~/.ssh/hostinger_deploy
           ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
 
+          # El bot corre en un VPS separado del hosting web. El IP productivo
+          # se conserva como fallback operativo; el secreto HOSTINGER_HOST se
+          # prueba también por compatibilidad con el despliegue existente.
+          candidates=("193.203.188.215")
+          if [[ -n "${HOSTINGER_HOST:-}" && "$HOSTINGER_HOST" != "193.203.188.215" ]]; then
+            candidates+=("$HOSTINGER_HOST")
+          fi
+
+          TARGET_HOST=''
           SSH_PORT=''
-          for port in 65002 22; do
-            if timeout 15 ssh -i ~/.ssh/hostinger_deploy -p "$port" \
-              -o BatchMode=yes -o ConnectTimeout=8 \
-              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              "$HOSTINGER_USER@$HOSTINGER_HOST" 'true' >/dev/null 2>&1; then
-              SSH_PORT="$port"
-              break
-            fi
+          for host in "${candidates[@]}"; do
+            for port in 22 65002; do
+              if timeout 15 ssh -i ~/.ssh/hostinger_deploy -p "$port" \
+                -o BatchMode=yes -o ConnectTimeout=8 \
+                -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                "$HOSTINGER_USER@$host" 'true' >/dev/null 2>&1; then
+                TARGET_HOST="$host"
+                SSH_PORT="$port"
+                break 2
+              fi
+            done
           done
-          test -n "$SSH_PORT"
-          printf 'SSH_PORT=%s\n' "$SSH_PORT" >> "$GITHUB_ENV"
+          test -n "$TARGET_HOST"
+          echo "::add-mask::$TARGET_HOST"
+          printf 'TARGET_HOST=%s\nSSH_PORT=%s\n' "$TARGET_HOST" "$SSH_PORT" >> "$GITHUB_ENV"
 
       - name: Discover bot directory
         env:
-          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
         shell: bash
         run: |
           set -euo pipefail
           SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-          BOT_DIR="$("${SSH[@]}" "$HOSTINGER_USER@$HOSTINGER_HOST" 'find "$HOME" -maxdepth 7 -type f -name docker-compose.yml -print 2>/dev/null | while IFS= read -r f; do if grep -q "bot_backend:" "$f"; then dirname "$f"; break; fi; done')"
+          BOT_DIR="$("${SSH[@]}" "$HOSTINGER_USER@$TARGET_HOST" 'for base in "$HOME" /opt /srv; do [[ -d "$base" ]] || continue; find "$base" -maxdepth 8 -type f \( -name docker-compose.yml -o -name compose.yml \) -print 2>/dev/null; done | while IFS= read -r f; do if grep -q "bot_backend:" "$f"; then dirname "$f"; break; fi; done')"
           test -n "$BOT_DIR"
           echo "::add-mask::$BOT_DIR"
           printf 'BOT_DIR=%s\n' "$BOT_DIR" >> "$GITHUB_ENV"
 
       - name: Stage reconstruction without restarting production
         env:
-          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
         shell: bash
         run: |
@@ -70,7 +80,7 @@ jobs:
           SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
           SCP=(scp -q -i ~/.ssh/hostinger_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
           STAGE="$BOT_DIR/.live-preflight-$GITHUB_SHA"
-          "${SSH[@]}" "$HOSTINGER_USER@$HOSTINGER_HOST" "mkdir -p '$STAGE'"
+          "${SSH[@]}" "$HOSTINGER_USER@$TARGET_HOST" "mkdir -p '$STAGE'"
           files=(
             bot_logic.py bot_entry.py bot_presentation.py bot_flows.py
             test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py
@@ -78,16 +88,18 @@ jobs:
             requirements-bot.txt Dockerfile.bot
           )
           for file in "${files[@]}"; do
-            "${SCP[@]}" "vps/$file" "$HOSTINGER_USER@$HOSTINGER_HOST:$STAGE/$file"
+            "${SCP[@]}" "vps/$file" "$HOSTINGER_USER@$TARGET_HOST:$STAGE/$file"
           done
 
-          "${SSH[@]}" "$HOSTINGER_USER@$HOSTINGER_HOST" "BOT_DIR='$BOT_DIR' STAGE='$STAGE' bash -s" <<'REMOTE'
+          "${SSH[@]}" "$HOSTINGER_USER@$TARGET_HOST" "BOT_DIR='$BOT_DIR' STAGE='$STAGE' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$BOT_DIR"
           test -f .env
-          test -f docker-compose.yml
-          grep -q 'bot_backend:' docker-compose.yml
-          docker compose ps bot_backend
+          test -f docker-compose.yml || test -f compose.yml
+          COMPOSE_FILE=docker-compose.yml
+          [[ -f "$COMPOSE_FILE" ]] || COMPOSE_FILE=compose.yml
+          grep -q 'bot_backend:' "$COMPOSE_FILE"
+          docker compose -f "$COMPOSE_FILE" ps bot_backend
           curl -fsS http://127.0.0.1:5000/webhook >/tmp/rapidito-health-before.json || true
 
           backup_dir=".bot-backups/preflight-${STAGE##*-}"
@@ -122,10 +134,9 @@ jobs:
 
       - name: Confirm production bot was not restarted
         env:
-          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
         shell: bash
         run: |
           set -euo pipefail
           SSH=(ssh -i ~/.ssh/hostinger_deploy -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-          "${SSH[@]}" "$HOSTINGER_USER@$HOSTINGER_HOST" "cd '$BOT_DIR' && docker compose ps bot_backend && curl -fsS http://127.0.0.1:5000/webhook"
+          "${SSH[@]}" "$HOSTINGER_USER@$TARGET_HOST" "cd '$BOT_DIR' && (docker compose ps bot_backend || docker compose -f compose.yml ps bot_backend) && curl -fsS http://127.0.0.1:5000/webhook"
