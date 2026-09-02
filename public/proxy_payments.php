@@ -77,13 +77,14 @@ function payment_clean_text($value, $max = 200) {
  * históricos usados por el portal, por eso enviamos ambos alias.
  */
 function payment_banesco_options($datos, $montoEnviado) {
-    $paymentType = strtolower(payment_clean_text($_POST['payment_type'] ?? '', 40));
     $bankId = payment_clean_text($_POST['bankId'] ?? $_POST['banco_origen'] ?? '', 40);
     $phoneNum = payment_clean_text($_POST['phoneNum'] ?? $_POST['phone_emisor'] ?? '', 40);
 
-    // En las modalidades Banesco → Banesco el formulario no muestra selector
-    // de banco, pero Banesco sí necesita identificar el banco de origen.
-    if ($bankId === '' && in_array($paymentType, ['pm_banesco', 'tf_banesco'], true)) {
+    // En los pagos Banesco → Banesco no existe selector de banco. El portal
+    // identifica explícitamente la modalidad; el bot histórico no siempre lo
+    // hace. Los flujos interbancarios sí envían banco_origen, por lo que una
+    // ausencia real de banco equivale a Banesco (0134) en ambos canales.
+    if ($bankId === '') {
         $bankId = '0134';
     }
 
@@ -91,12 +92,10 @@ function payment_banesco_options($datos, $montoEnviado) {
         'amount' => (float) $montoEnviado,
         'paymentDate' => $datos['fecha_pago'],
         'payment_date' => $datos['fecha_pago'],
+        'bankId' => $bankId,
+        'banco_origen' => $bankId,
     ];
 
-    if ($bankId !== '') {
-        $options['bankId'] = $bankId;
-        $options['banco_origen'] = $bankId;
-    }
     if ($phoneNum !== '') {
         $options['phoneNum'] = $phoneNum;
         $options['phone_emisor'] = $phoneNum;
