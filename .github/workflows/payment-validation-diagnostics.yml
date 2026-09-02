@@ -39,57 +39,102 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
+          set -u
           BASE="$HOME/domains/wifirapidito.com/public_html"
+          ROOT="$HOME/domains/wifirapidito.com"
           FILE="$BASE/banesco_api.php"
 
+          classify_file() {
+            candidate="$1"
+            [ -f "$candidate" ] || return 0
+            score=0
+            for field in referenceNumber accountId amount startDt phoneNum bankId; do
+              grep -q "$field" "$candidate" 2>/dev/null && score=$((score+1)) || true
+            done
+            if grep -q 'realm-api-qa\|openapi-qa\|/qa/' "$candidate" 2>/dev/null; then envmark='QA'; else envmark='NOT_QA'; fi
+            prodmark='no'
+            grep -Eqi 'production|produccion|producción|productivo|prod-api|realm-api-prod' "$candidate" 2>/dev/null && prodmark='yes' || true
+            printf 'file=%s env=%s production_marker=%s certified_fields=%s/6 sha256=%s\n' \
+              "$candidate" "$envmark" "$prodmark" "$score" "$(sha256sum "$candidate" 2>/dev/null | awk '{print $1}')"
+          }
+
           echo '=== Current deployed adapter ==='
-          test -s "$FILE"
-          sha256sum "$FILE" | awk '{print "sha256=" $1}'
-          if grep -q 'realm-api-qa' "$FILE"; then echo 'environment=QA'; else echo 'environment=NOT_QA'; fi
+          if [ ! -s "$FILE" ]; then
+            echo 'current_adapter=missing'
+            exit 1
+          fi
+          classify_file "$FILE"
+          grep -E 'function[[:space:]]+checkTransaction[[:space:]]*\(' "$FILE" 2>/dev/null | head -1 | sed -E 's/[[:space:]]+/ /g' | sed 's/^/check_signature=/' || true
+          echo 'url_hosts:'
+          grep -Eo "https://[^\"'[:space:]]+" "$FILE" 2>/dev/null | sed -E 's#(https://[^/]+).*#\1#' | sort -u | sed 's/^/  /' || true
           for field in referenceNumber accountId amount startDt phoneNum bankId endDt; do
             if grep -q "$field" "$FILE"; then echo "$field=yes"; else echo "$field=no"; fi
           done
-          if grep -q "paymentId" "$FILE"; then echo 'legacy_paymentId=yes'; else echo 'legacy_paymentId=no'; fi
-          if grep -q "BANESCO_CLIENT_SECRET" "$FILE"; then echo 'embedded_credentials=yes'; else echo 'embedded_credentials=no'; fi
+          if grep -q 'paymentId' "$FILE"; then echo 'legacy_paymentId=yes'; else echo 'legacy_paymentId=no'; fi
+          if grep -Eq 'CLIENT_SECRET|client_secret|USER_KEY|user_key' "$FILE"; then echo 'credential_material_present=yes'; else echo 'credential_material_present=no'; fi
 
-          echo '=== Other plain PHP copies ==='
-          find "$HOME/domains/wifirapidito.com" -type f \( -name 'banesco_api.php' -o -name 'banesco_api*.php' \) 2>/dev/null | head -40 | while read -r candidate; do
-            printf 'copy=%s ' "$candidate"
-            if grep -q 'realm-api-qa' "$candidate"; then printf 'env=QA '; else printf 'env=NOT_QA '; fi
-            score=0
-            for field in referenceNumber accountId amount startDt phoneNum bankId; do
-              grep -q "$field" "$candidate" && score=$((score+1)) || true
-            done
-            echo "certified_fields=$score/6"
-          done
-
-          echo '=== Recent archives containing banesco_api.php ==='
-          count=0
-          while IFS= read -r archive; do
-            if tar -tzf "$archive" 2>/dev/null | grep -q 'banesco_api.php'; then
-              echo "archive=$archive"
-              tmp="$(mktemp -d)"
-              tar -xzf "$archive" -C "$tmp" --wildcards --no-anchored 'banesco_api.php' 2>/dev/null || true
-              while IFS= read -r candidate; do
-                printf '  recovered=' 
-                if grep -q 'realm-api-qa' "$candidate"; then printf 'env=QA '; else printf 'env=NOT_QA '; fi
-                score=0
-                for field in referenceNumber accountId amount startDt phoneNum bankId; do
-                  grep -q "$field" "$candidate" && score=$((score+1)) || true
-                done
-                echo "certified_fields=$score/6 sha256=$(sha256sum "$candidate" | awk '{print $1}')"
-              done < <(find "$tmp" -type f -name 'banesco_api.php' 2>/dev/null)
-              rm -rf "$tmp"
-              count=$((count+1))
-              [ "$count" -ge 20 ] && break
+          echo '=== Plain candidate files ==='
+          find "$ROOT" -type f -size -3M \
+            \( -name '*.php' -o -name '*.env' -o -name '*.ini' -o -name '*.conf' -o -name '*.json' -o -name '*.txt' -o -name '*.bak' -o -name '*.old' -o -name '*.next' \) \
+            ! -path '*/node_modules/*' ! -path '*/.git/*' 2>/dev/null > /tmp/rapidito-banesco-files.txt || true
+          candidates=0
+          while IFS= read -r candidate; do
+            [ -f "$candidate" ] || continue
+            if grep -q 'referenceNumber' "$candidate" 2>/dev/null && grep -q 'accountId' "$candidate" 2>/dev/null; then
+              classify_file "$candidate"
+              grep -Eo "https://[^\"'[:space:]]+" "$candidate" 2>/dev/null | sed -E 's#(https://[^/]+).*#\1#' | sort -u | sed 's/^/  host=/' || true
+              candidates=$((candidates+1))
+              [ "$candidates" -ge 60 ] && break
             fi
-          done < <(find "$HOME/domains/wifirapidito.com" -type f \( -name '*.tar.gz' -o -name '*.tgz' \) -mtime -365 2>/dev/null | sort -r | head -120)
+          done < /tmp/rapidito-banesco-files.txt
+          echo "plain_candidates=$candidates"
 
-          echo '=== Recent payment endpoint access ==='
-          for log in "$HOME/domains/wifirapidito.com/logs"/* "$BASE/error_log"; do
+          echo '=== Private/config files with Banesco variable names (values never printed) ==='
+          config_count=0
+          while IFS= read -r candidate; do
+            [ -f "$candidate" ] || continue
+            if grep -Eqi 'BANESCO_|referenceNumber|realm-api' "$candidate" 2>/dev/null; then
+              printf 'config_file=%s ' "$candidate"
+              if grep -q 'realm-api-qa\|openapi-qa' "$candidate" 2>/dev/null; then printf 'qa_marker=yes '; else printf 'qa_marker=no '; fi
+              if grep -Eqi 'production|produccion|producción|productivo|realm-api-prod|prod-api' "$candidate" 2>/dev/null; then printf 'production_marker=yes '; else printf 'production_marker=no '; fi
+              names="$(grep -Eo 'BANESCO_[A-Z0-9_]+' "$candidate" 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//' || true)"
+              echo "variable_names=${names:-none}"
+              config_count=$((config_count+1))
+              [ "$config_count" -ge 80 ] && break
+            fi
+          done < /tmp/rapidito-banesco-files.txt
+          echo "config_candidates=$config_count"
+
+          echo '=== Recent archives containing Banesco adapter ==='
+          find "$ROOT" -type f \( -name '*.tar.gz' -o -name '*.tgz' \) -mtime -500 2>/dev/null | sort -r | head -200 > /tmp/rapidito-archives.txt || true
+          archive_count=0
+          while IFS= read -r archive; do
+            [ -f "$archive" ] || continue
+            listing="$(tar -tzf "$archive" 2>/dev/null | grep -E '(^|/)banesco_api[^/]*\.php$' | head -5 || true)"
+            [ -n "$listing" ] || continue
+            echo "archive=$archive"
+            tmp="$(mktemp -d)"
+            while IFS= read -r member; do
+              [ -n "$member" ] || continue
+              tar -xzf "$archive" -C "$tmp" "$member" 2>/dev/null || true
+            done <<< "$listing"
+            while IFS= read -r recovered; do
+              classify_file "$recovered"
+              grep -Eo "https://[^\"'[:space:]]+" "$recovered" 2>/dev/null | sed -E 's#(https://[^/]+).*#\1#' | sort -u | sed 's/^/  host=/' || true
+            done < <(find "$tmp" -type f -name 'banesco_api*.php' 2>/dev/null)
+            rm -rf "$tmp"
+            archive_count=$((archive_count+1))
+            [ "$archive_count" -ge 30 ] && break
+          done < /tmp/rapidito-archives.txt
+          echo "archives_with_adapter=$archive_count"
+
+          echo '=== Recent payment endpoint access (sanitized) ==='
+          for log in "$ROOT/logs"/* "$BASE/error_log"; do
             [ -f "$log" ] || continue
-            echo "log=$(basename "$log")"
-            tail -n 2500 "$log" 2>/dev/null | grep 'proxy_payments.php' | tail -20 | sed -E 's/(proxy_payments\.php)\?[^ ]*/\1?…/g' || true
+            matches="$(tail -n 4000 "$log" 2>/dev/null | grep 'proxy_payments.php' | tail -20 | sed -E 's/(proxy_payments\.php)\?[^ ]*/\1?…/g' || true)"
+            if [ -n "$matches" ]; then
+              echo "log=$(basename "$log")"
+              printf '%s\n' "$matches"
+            fi
           done
           REMOTE
