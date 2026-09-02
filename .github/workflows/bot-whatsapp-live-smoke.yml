@@ -22,12 +22,18 @@ jobs:
         run: python -m pip install --disable-pip-version-check -r vps/requirements-bot.txt
 
       - name: Send harmless live WhatsApp smoke message
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
         shell: bash
         run: |
           set -euo pipefail
           set -a
           source vps/.env
           set +a
+          test -n "$HOSTINGER_HOST"
+          if [[ "${WHATSAPP_PROVIDER:-evolution}" == "evolution" ]]; then
+            export EVO_API_URL="http://$HOSTINGER_HOST:8080"
+          fi
           cd vps
           python - <<'PY'
           import asyncio
