@@ -1,0 +1,93 @@
+name: Payment Active Config Diagnostics
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/payment-active-config-diagnostics.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Inspect active Banesco runtime safely
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          FILE="$BASE/banesco_api.php"
+          PROXY="$BASE/proxy_payments.php"
+          test -s "$FILE"
+          test -s "$PROXY"
+
+          echo '=== Runtime-selected configuration ==='
+          php -r '
+            require $argv[1];
+            foreach (["BANESCO_ENV", "BANESCO_API_URL", "BANESCO_SSO_URL"] as $name) {
+              if (!defined($name)) { echo $name . "=undefined\n"; continue; }
+              $value = constant($name);
+              if (str_ends_with($name, "_URL")) {
+                $host = parse_url((string)$value, PHP_URL_HOST) ?: "invalid";
+                echo $name . "_host=" . $host . "\n";
+              } else {
+                echo $name . "=" . preg_replace("/[^a-zA-Z0-9_-]/", "", (string)$value) . "\n";
+              }
+            }
+            foreach (["BANESCO_CLIENT_ID", "BANESCO_CLIENT_SECRET", "BANESCO_CLIENT_ID_PROD", "BANESCO_CLIENT_SECRET_PROD", "BANESCO_CLIENT_ID_QA", "BANESCO_CLIENT_SECRET_QA"] as $name) {
+              $set = defined($name) && strlen((string)constant($name)) > 0;
+              echo $name . "_configured=" . ($set ? "yes" : "no") . "\n";
+            }
+            if (class_exists("BanescoAPI")) {
+              $ref = new ReflectionClass("BanescoAPI");
+              $methods = [];
+              foreach ($ref->getMethods() as $method) $methods[] = $method->getName();
+              sort($methods);
+              echo "class_methods=" . implode(",", array_unique($methods)) . "\n";
+              if ($ref->hasMethod("checkTransaction")) {
+                $m = $ref->getMethod("checkTransaction");
+                echo "check_required_params=" . $m->getNumberOfRequiredParameters() . "\n";
+                echo "check_total_params=" . $m->getNumberOfParameters() . "\n";
+              }
+            }
+          ' "$FILE"
+
+          echo '=== checkTransaction option contract ==='
+          php -r '
+            $src = file_get_contents($argv[1]);
+            preg_match_all("/\\$options\\s*\\[\\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]\\s*\\]/", $src, $m);
+            $keys = array_values(array_unique($m[1] ?? []));
+            sort($keys);
+            echo "option_keys=" . implode(",", $keys) . "\n";
+            echo "reads_post_directly=" . (strpos($src, "$_POST") !== false ? "yes" : "no") . "\n";
+          ' "$FILE"
+
+          echo '=== Current proxy invocation ==='
+          grep -n 'BanescoAPI::checkTransaction' "$PROXY" | sed -E 's/[[:space:]]+/ /g' || true
+          echo 'proxy_fields_available:'
+          for field in amount banco_origen phone_emisor payment_date payment_type payment_type_label; do
+            if grep -q "$field" "$PROXY"; then echo "  $field=yes"; else echo "  $field=no"; fi
+          done
+          REMOTE
