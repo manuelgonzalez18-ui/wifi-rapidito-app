@@ -41,20 +41,22 @@ jobs:
           cd "$APP"
           php -r '
             require "config_wisphub.php";
-            $url = rtrim(WISPHUB_API_URL, "/") . "/promesas-de-pago/?limit=300";
-            $ch = curl_init($url);
-            curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"],CURLOPT_TIMEOUT=>20]);
-            $body=curl_exec($ch); $code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE); curl_close($ch);
-            echo "HTTP=$code\n";
-            if ($code!==200 || $body===false) exit(2);
-            $d=json_decode($body,true);
-            $rows=is_array($d["results"]??null)?$d["results"]:(is_array($d)&&array_is_list($d)?$d:[]);
-            echo "TOP_KEYS=".(is_array($d)?implode(",",array_keys($d)):"NONE")."\n";
-            echo "ROWS=".count($rows)."\n";
-            echo "ROW_KEYS=".($rows&&is_array($rows[0])?implode(",",array_keys($rows[0])):"NONE")."\n";
-            $allowed=["id","id_promesa","id_factura","fecha_limite","fecha","estado","status","cumplida","pagada","usuario","servicio","id_servicio"];
-            $matches=[];
-            foreach($rows as $r){ if(!is_array($r)||stripos(json_encode($r),"leidycartagena")===false) continue; $safe=[]; foreach($allowed as $k){if(array_key_exists($k,$r))$safe[$k]=$r[$k];} $matches[]=$safe; }
-            echo "LEIDY_MATCHES=".json_encode($matches,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)."\n";
+            $hosts=["app"=>"https://api.wisphub.app/api","net"=>"https://api.wisphub.net/api"];
+            foreach($hosts as $label=>$base){
+              $url=$base."/promesas-de-pago/?limit=300";
+              $ch=curl_init($url);
+              curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"],CURLOPT_TIMEOUT=>20]);
+              $body=curl_exec($ch); $code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE); curl_close($ch);
+              echo strtoupper($label)."_HTTP=$code\n";
+              if($code!==200||$body===false) continue;
+              $d=json_decode($body,true);
+              $rows=is_array($d["results"]??null)?$d["results"]:(is_array($d)&&array_is_list($d)?$d:[]);
+              echo strtoupper($label)."_TOP_KEYS=".(is_array($d)?implode(",",array_keys($d)):"NONE")."\n";
+              echo strtoupper($label)."_ROWS=".count($rows)."\n";
+              echo strtoupper($label)."_ROW_KEYS=".($rows&&is_array($rows[0])?implode(",",array_keys($rows[0])):"NONE")."\n";
+              $matches=[];
+              foreach($rows as $r){if(!is_array($r)||stripos(json_encode($r),"leidycartagena")===false)continue;$safe=[];foreach(["id","id_promesa","id_factura","fecha_limite","fecha","estado","status","cumplida","pagada","usuario","servicio","id_servicio"] as $k){if(array_key_exists($k,$r))$safe[$k]=$r[$k];}$matches[]=$safe;}
+              echo strtoupper($label)."_LEIDY_MATCHES=".json_encode($matches,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)."\n";
+            }
           '
           REMOTE
