@@ -1,0 +1,52 @@
+name: Promise WispHub Shape Readonly
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/promise-wisphub-shape-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure VPS SSH
+        env:
+          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
+          BOT_VPS_SSH_KEY: ${{ secrets.BOT_VPS_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BOT_VPS_HOST" && test -n "$BOT_VPS_PORT" && test -n "$BOT_VPS_USER" && test -n "$BOT_VPS_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$BOT_VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/rapidito
+          chmod 600 ~/.ssh/rapidito
+          ssh-keyscan -p "$BOT_VPS_PORT" "$BOT_VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Inspect promise records without writes
+        env:
+          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/rapidito -p "$BOT_VPS_PORT" -o BatchMode=yes "$BOT_VPS_USER@$BOT_VPS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd /home/bot.local/public_html
+          set -a
+          source .env
+          set +a
+          test -n "${WISPHUB_API_KEY:-}"
+          code=$(curl -sS --max-time 20 -o /tmp/promises.json -w '%{http_code}' -H "Authorization: Api-Key $WISPHUB_API_KEY" -H 'Accept: application/json' 'https://api.wisphub.app/api/promesas-de-pago/?limit=300')
+          echo "HTTP=$code"
+          test "$code" = 200
+          python3 -c "import json; d=json.load(open('/tmp/promises.json')); rows=d.get('results',[]) if isinstance(d,dict) else d if isinstance(d,list) else []; print('TOP_KEYS='+','.join(d.keys()) if isinstance(d,dict) else 'TOP_TYPE='+type(d).__name__); print('ROWS='+str(len(rows))); print('ROW_KEYS='+(','.join(rows[0].keys()) if rows and isinstance(rows[0],dict) else 'NONE')); allowed={'id','id_promesa','id_factura','fecha_limite','fecha','estado','status','cumplida','pagada','usuario','servicio','id_servicio'}; matches=[]; [matches.append({k:v for k,v in r.items() if k in allowed}) for r in rows if isinstance(r,dict) and 'leidycartagena' in json.dumps(r,ensure_ascii=False).lower()]; print('LEIDY_MATCHES='+json.dumps(matches,ensure_ascii=False,separators=(',',':')))"
+          rm -f /tmp/promises.json
+          REMOTE
