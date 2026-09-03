@@ -138,9 +138,9 @@ jobs:
             RESTRICTIONS="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/promise_restrictions.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             EMAIL_INGEST="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/promise_email_ingest.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             PROMISES="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/proxy_promises.php?health=$GITHUB_SHA" 2>/dev/null || true)"
-            if grep -q '1.1-promise-restrictions' <<<"$RESTRICTIONS" \
+            if grep -q '1.2-ledger-reconciliation' <<<"$RESTRICTIONS" \
               && grep -q '1.0-promise-email-ingest' <<<"$EMAIL_INGEST" \
-              && grep -q '3.0-restriction-enforcement' <<<"$PROMISES"; then
+              && grep -q '3.1-promise-ledger' <<<"$PROMISES"; then
               echo 'Promise restriction backend verified.'
               exit 0
             fi
