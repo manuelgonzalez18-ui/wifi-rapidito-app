@@ -100,45 +100,4 @@ for item in items:
 PY
             fi
           fi
-
-          echo "--- wisphub promise payload shape ---"
-          if [[ -n "${WISPHUB_API_KEY:-}" ]]; then
-            code=$(curl -sS --max-time 20 -o /tmp/promises.json -w '%{http_code}' \
-              -H "Authorization: Api-Key $WISPHUB_API_KEY" \
-              -H 'Accept: application/json' \
-              'https://api.wisphub.app/api/promesas-de-pago/?limit=300' || true)
-            echo "WISPHUB_PROMISES_HTTP=$code"
-            if [[ "$code" == "200" ]]; then
-              python3 - <<'PY'
-import json
-try:
-    data=json.load(open('/tmp/promises.json'))
-except Exception:
-    print('WISPHUB_PROMISES_JSON=INVALID')
-    raise SystemExit
-print('WISPHUB_PROMISES_TOP_KEYS='+','.join(data.keys()) if isinstance(data,dict) else 'WISPHUB_PROMISES_TOP_TYPE='+type(data).__name__)
-rows=data.get('results',[]) if isinstance(data,dict) else data if isinstance(data,list) else []
-print('WISPHUB_PROMISES_ROWS='+str(len(rows)))
-if rows and isinstance(rows[0],dict):
-    print('WISPHUB_PROMISE_ROW_KEYS='+','.join(rows[0].keys()))
-for row in rows:
-    if not isinstance(row,dict):
-        continue
-    text=json.dumps(row,ensure_ascii=False).lower()
-    if 'leidycartagena' not in text:
-        continue
-    allowed=('id','id_promesa','id_factura','fecha_limite','fecha','estado','status','cumplida','pagada','usuario','servicio','id_servicio')
-    safe={k:row.get(k) for k in allowed if k in row}
-    cliente=row.get('cliente')
-    if isinstance(cliente,dict):
-        safe['cliente_keys']=list(cliente.keys())
-        for k in ('usuario','username','id_servicio','id_cliente','estado','status'):
-            if k in cliente: safe['cliente_'+k]=cliente.get(k)
-    elif cliente not in (None,''):
-        safe['cliente_type']=type(cliente).__name__
-    print('WISPHUB_PROMISE_LEIDY='+json.dumps(safe,ensure_ascii=False,separators=(',',':')))
-PY
-            fi
-          fi
-          rm -f /tmp/promises.json /tmp/evo_instances.json
           REMOTE
