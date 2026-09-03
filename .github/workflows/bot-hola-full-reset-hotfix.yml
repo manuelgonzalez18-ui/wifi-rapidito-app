@@ -1,0 +1,102 @@
+name: Bot Hola Full Reset Hotfix
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-hola-full-reset-hotfix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: reconstruccion-bot-10-opciones
+
+      - name: Patch restart command and add regression test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          entry = Path('vps/bot_entry.py')
+          text = entry.read_text()
+          old = '''    # Antes de identificar una cuenta, el bot histórico pide el usuario de
+    # WiFi Rapidito. Una vez identificado, MENU vuelve directamente al menú.
+    if message in {"menu", "menú", "volver", "inicio"} or message.startswith("hola") or message.startswith("buenas"):
+        if state.get("identity"):
+            await bot.show_client_menu(numero_cliente, state, state["identity"])
+        else:
+            state["mode"] = "START"
+            state["identity"] = None
+            state["data"] = {}
+            await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
+        return
+'''
+          new = '''    # HOLA es un reinicio absoluto de la conversación: borra identidad y
+    # cualquier flujo transitorio para volver al inicio, incluso si el cliente
+    # ya estaba identificado. INICIO/REINICIAR tienen el mismo comportamiento.
+    full_reset = (
+        re.fullmatch(r"hola[!¡?.\\s]*", message) is not None
+        or message in {"inicio", "reiniciar", "reset"}
+    )
+    if full_reset:
+        state["mode"] = "START"
+        state["identity"] = None
+        state["data"] = {}
+        await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
+        return
+
+    # MENU/VOLVER conserva la comodidad de regresar al panel cuando ya existe
+    # una cuenta identificada; si no, vuelve a la bienvenida.
+    if message in {"menu", "menú", "volver"} or message.startswith("buenas"):
+        if state.get("identity"):
+            await bot.show_client_menu(numero_cliente, state, state["identity"])
+        else:
+            state["mode"] = "START"
+            state["identity"] = None
+            state["data"] = {}
+            await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
+        return
+'''
+          if new not in text:
+              if old not in text:
+                  raise SystemExit('No se encontró el bloque conversacional esperado; no se aplicó ningún cambio.')
+              entry.write_text(text.replace(old, new, 1))
+
+          flows = Path('vps/bot_flows.py')
+          ftext = flows.read_text()
+          old_menu = 'Escribe el número de la opción 👇"""'
+          new_menu = 'Escribe el número de la opción 👇\n\n_Para reiniciar completamente, escribe *HOLA*._"""'
+          if new_menu not in ftext:
+              if old_menu not in ftext:
+                  raise SystemExit('No se encontró el cierre de MAIN_MENU esperado.')
+              flows.write_text(ftext.replace(old_menu, new_menu, 1))
+
+          test = Path('vps/test_bot_reset.py')
+          test.write_text('''import unittest\nfrom unittest.mock import AsyncMock, patch\n\nimport bot_entry as entry\n\nbot = entry.bot\nPHONE = "584241234567"\nIDENTITY = {\n    "service_id": "579",\n    "client_id": "321",\n    "username": "clienteprueba",\n    "name": "Cliente Prueba",\n    "phone": PHONE,\n    "status": "Activo",\n    "raw": {},\n}\n\n\nclass BotResetTests(unittest.IsolatedAsyncioTestCase):\n    def setUp(self):\n        bot.user_states.clear()\n\n    async def test_hola_reinicia_desde_cualquier_flujo(self):\n        state = bot.state_for(PHONE)\n        state["mode"] = "PAYMENT_CONFIRM"\n        state["identity"] = dict(IDENTITY)\n        state["data"] = {"reference": "123456", "amount": "100"}\n        send = AsyncMock(return_value=True)\n\n        with patch.object(bot, "enviar_whatsapp", send):\n            await bot.process_user_message(PHONE, "Hola")\n\n        self.assertEqual(state["mode"], "START")\n        self.assertIsNone(state["identity"])\n        self.assertEqual(state["data"], {})\n        self.assertIn("Bienvenido al Asistente Virtual", send.await_args.args[1])\n        self.assertIn("Ya soy cliente", send.await_args.args[1])\n\n    async def test_menu_con_identidad_sigue_volviendo_al_panel(self):\n        state = bot.state_for(PHONE)\n        state["mode"] = "PAYMENT_DATE"\n        state["identity"] = dict(IDENTITY)\n        state["data"] = {"reference": "123456"}\n        send = AsyncMock(return_value=True)\n\n        with patch.object(bot, "enviar_whatsapp", send):\n            await bot.process_user_message(PHONE, "menu")\n\n        self.assertEqual(state["mode"], "CLIENT_MENU")\n        self.assertEqual(state["identity"]["username"], "clienteprueba")\n        self.assertEqual(state["data"], {})\n        self.assertIn("¿En qué puedo ayudarte", send.await_args.args[1])\n\n\nif __name__ == "__main__":\n    unittest.main()\n''')
+          PY
+
+          python -m py_compile vps/bot_entry.py vps/bot_flows.py vps/test_bot_reset.py
+          cd vps
+          python -m unittest test_bot_reset.py
+
+      - name: Commit source hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'wifi-rapidito-actions'
+          git config user.email 'actions@users.noreply.github.com'
+          git add vps/bot_entry.py vps/bot_flows.py vps/test_bot_reset.py
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+            exit 0
+          fi
+          git commit -m 'Reinicia completamente el bot al recibir HOLA'
+          git push origin HEAD:reconstruccion-bot-10-opciones
