@@ -7,96 +7,152 @@ on:
       - '.github/workflows/bot-hola-full-reset-hotfix.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch:
+  deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 20
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: reconstruccion-bot-10-opciones
 
-      - name: Patch restart command and add regression test
+      - name: Apply reset patch locally
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          entry = Path('vps/bot_entry.py')
-          text = entry.read_text()
-          old = '''    # Antes de identificar una cuenta, el bot histórico pide el usuario de
-    # WiFi Rapidito. Una vez identificado, MENU vuelve directamente al menú.
-    if message in {"menu", "menú", "volver", "inicio"} or message.startswith("hola") or message.startswith("buenas"):
-        if state.get("identity"):
-            await bot.show_client_menu(numero_cliente, state, state["identity"])
-        else:
-            state["mode"] = "START"
-            state["identity"] = None
-            state["data"] = {}
-            await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
-        return
-'''
-          new = '''    # HOLA es un reinicio absoluto de la conversación: borra identidad y
-    # cualquier flujo transitorio para volver al inicio, incluso si el cliente
-    # ya estaba identificado. INICIO/REINICIAR tienen el mismo comportamiento.
-    full_reset = (
-        re.fullmatch(r"hola[!¡?.\\s]*", message) is not None
-        or message in {"inicio", "reiniciar", "reset"}
-    )
-    if full_reset:
-        state["mode"] = "START"
-        state["identity"] = None
-        state["data"] = {}
-        await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
-        return
-
-    # MENU/VOLVER conserva la comodidad de regresar al panel cuando ya existe
-    # una cuenta identificada; si no, vuelve a la bienvenida.
-    if message in {"menu", "menú", "volver"} or message.startswith("buenas"):
-        if state.get("identity"):
-            await bot.show_client_menu(numero_cliente, state, state["identity"])
-        else:
-            state["mode"] = "START"
-            state["identity"] = None
-            state["data"] = {}
-            await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
-        return
-'''
-          if new not in text:
-              if old not in text:
-                  raise SystemExit('No se encontró el bloque conversacional esperado; no se aplicó ningún cambio.')
-              entry.write_text(text.replace(old, new, 1))
-
-          flows = Path('vps/bot_flows.py')
-          ftext = flows.read_text()
-          old_menu = 'Escribe el número de la opción 👇"""'
-          new_menu = 'Escribe el número de la opción 👇\n\n_Para reiniciar completamente, escribe *HOLA*._"""'
-          if new_menu not in ftext:
-              if old_menu not in ftext:
-                  raise SystemExit('No se encontró el cierre de MAIN_MENU esperado.')
-              flows.write_text(ftext.replace(old_menu, new_menu, 1))
-
-          test = Path('vps/test_bot_reset.py')
-          test.write_text('''import unittest\nfrom unittest.mock import AsyncMock, patch\n\nimport bot_entry as entry\n\nbot = entry.bot\nPHONE = "584241234567"\nIDENTITY = {\n    "service_id": "579",\n    "client_id": "321",\n    "username": "clienteprueba",\n    "name": "Cliente Prueba",\n    "phone": PHONE,\n    "status": "Activo",\n    "raw": {},\n}\n\n\nclass BotResetTests(unittest.IsolatedAsyncioTestCase):\n    def setUp(self):\n        bot.user_states.clear()\n\n    async def test_hola_reinicia_desde_cualquier_flujo(self):\n        state = bot.state_for(PHONE)\n        state["mode"] = "PAYMENT_CONFIRM"\n        state["identity"] = dict(IDENTITY)\n        state["data"] = {"reference": "123456", "amount": "100"}\n        send = AsyncMock(return_value=True)\n\n        with patch.object(bot, "enviar_whatsapp", send):\n            await bot.process_user_message(PHONE, "Hola")\n\n        self.assertEqual(state["mode"], "START")\n        self.assertIsNone(state["identity"])\n        self.assertEqual(state["data"], {})\n        self.assertIn("Bienvenido al Asistente Virtual", send.await_args.args[1])\n        self.assertIn("Ya soy cliente", send.await_args.args[1])\n\n    async def test_menu_con_identidad_sigue_volviendo_al_panel(self):\n        state = bot.state_for(PHONE)\n        state["mode"] = "PAYMENT_DATE"\n        state["identity"] = dict(IDENTITY)\n        state["data"] = {"reference": "123456"}\n        send = AsyncMock(return_value=True)\n\n        with patch.object(bot, "enviar_whatsapp", send):\n            await bot.process_user_message(PHONE, "menu")\n\n        self.assertEqual(state["mode"], "CLIENT_MENU")\n        self.assertEqual(state["identity"]["username"], "clienteprueba")\n        self.assertEqual(state["data"], {})\n        self.assertIn("¿En qué puedo ayudarte", send.await_args.args[1])\n\n\nif __name__ == "__main__":\n    unittest.main()\n''')
-          PY
-
+          git apply --check vps/hola_full_reset.patch
+          git apply vps/hola_full_reset.patch
           python -m py_compile vps/bot_entry.py vps/bot_flows.py vps/test_bot_reset.py
-          cd vps
-          python -m unittest test_bot_reset.py
+          grep -q 'full_reset' vps/bot_entry.py
+          grep -q 'reiniciar completamente' vps/bot_flows.py
 
-      - name: Commit source hotfix
+      - name: Configure verified SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'wifi-rapidito-actions'
-          git config user.email 'actions@users.noreply.github.com'
-          git add vps/bot_entry.py vps/bot_flows.py vps/test_bot_reset.py
-          if git diff --cached --quiet; then
-            echo 'No changes to commit.'
-            exit 0
-          fi
-          git commit -m 'Reinicia completamente el bot al recibir HOLA'
-          git push origin HEAD:reconstruccion-bot-10-opciones
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+
+      - name: Package patched bot
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            bot_logic.py bot_entry.py bot_presentation.py bot_flows.py kommo_service.py
+            validate_bot_env.py
+            test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py test_bot_reset.py
+            requirements-bot.txt Dockerfile.bot
+          )
+          for f in "${files[@]}"; do test -f "vps/$f"; done
+          tar -C vps -czf /tmp/rapidito-hola-reset.tgz "${files[@]}"
+          scp -i ~/.ssh/key -P "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            /tmp/rapidito-hola-reset.tgz "$TARGET_USER@$TARGET_HOST:/root/rapidito-hola-reset-${GITHUB_SHA}.tgz"
+
+      - name: Build test and deploy with rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" \
+            "GITHUB_SHA='$GITHUB_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          SHORT=${GITHUB_SHA:0:12}
+          STAGE=/root/rapidito-hola-reset-$SHORT
+          IMAGE=wifi-rapidito-bot:hola-reset-$SHORT
+          SMOKE=rapidito_hola_reset_smoke
+          STAMP=$(date +%Y%m%d-%H%M%S)
+          BACKUP=/root/rapidito-hola-reset-backup-$STAMP
+
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE" "$BACKUP/files"
+          chmod 700 "$BACKUP"
+          tar -xzf "/root/rapidito-hola-reset-${GITHUB_SHA}.tgz" -C "$STAGE"
+
+          cd "$STAGE"
+          docker build -f Dockerfile.bot -t "$IMAGE" .
+          docker run --rm "$IMAGE" python -m unittest \
+            test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py test_bot_reset.py
+          docker run --rm --env-file "$APP/.env" "$IMAGE" python validate_bot_env.py --network
+
+          docker rm -f "$SMOKE" >/dev/null 2>&1 || true
+          docker run -d --rm --name "$SMOKE" --env-file "$APP/.env" -p 127.0.0.1:5001:5000 "$IMAGE" >/dev/null
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:5001/webhook >/tmp/hola-reset-smoke.json 2>/dev/null; then break; fi
+            sleep 1
+          done
+          grep -q '"status":"ok"' /tmp/hola-reset-smoke.json
+          docker rm -f "$SMOKE" >/dev/null 2>&1 || true
+
+          old_health=$(curl -fsS http://127.0.0.1:5000/webhook)
+          printf '%s' "$old_health" | grep -q '"status":"ok"'
+          docker inspect -f '{{.State.Running}}' evolution_api | grep -q true
+          docker inspect -f '{{.State.Running}}' redis_bot | grep -q true
+
+          for f in bot_entry.py bot_flows.py test_bot_reset.py; do
+            if [ -f "$APP/$f" ]; then cp -a "$APP/$f" "$BACKUP/files/$f"; fi
+          done
+          docker inspect bot_backend > "$BACKUP/bot_backend-before.json"
+          docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend > "$BACKUP/bot_backend-before.env"
+          chmod 600 "$BACKUP/bot_backend-before.env"
+
+          OLD="bot_backend_pre_hola_reset_$STAMP"
+          rollback() {
+            docker rm -f bot_backend >/dev/null 2>&1 || true
+            if docker inspect "$OLD" >/dev/null 2>&1; then
+              docker rename "$OLD" bot_backend >/dev/null 2>&1 || true
+              docker start bot_backend >/dev/null 2>&1 || true
+            fi
+            for f in bot_entry.py bot_flows.py test_bot_reset.py; do
+              if [ -f "$BACKUP/files/$f" ]; then
+                cp -a "$BACKUP/files/$f" "$APP/$f"
+              elif [ "$f" = test_bot_reset.py ]; then
+                rm -f "$APP/$f"
+              fi
+            done
+          }
+          trap 'rc=$?; if [ $rc -ne 0 ]; then rollback; fi; exit $rc' EXIT
+
+          cp -a "$STAGE/bot_entry.py" "$APP/bot_entry.py"
+          cp -a "$STAGE/bot_flows.py" "$APP/bot_flows.py"
+          cp -a "$STAGE/test_bot_reset.py" "$APP/test_bot_reset.py"
+
+          docker stop -t 15 bot_backend >/dev/null
+          docker rename bot_backend "$OLD"
+          docker run -d \
+            --name bot_backend \
+            --restart always \
+            --network public_html_default \
+            --env-file "$APP/.env" \
+            -p 5000:5000 \
+            "$IMAGE" >/dev/null
+
+          healthy=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/webhook >/tmp/new-health.json 2>/dev/null && \
+               grep -q '"status":"ok"' /tmp/new-health.json && \
+               grep -q '"provider":"meta"' /tmp/new-health.json; then
+              healthy=1
+              break
+            fi
+            sleep 1
+          done
+          test "$healthy" = 1
+          docker logs --tail 50 bot_backend 2>&1 | grep -qiE 'traceback|syntaxerror' && exit 44 || true
+
+          trap - EXIT
+          echo "HOLA_RESET_DEPLOYED=1"
+          echo "IMAGE=$IMAGE"
+          echo "BACKUP=$BACKUP"
+          REMOTE
