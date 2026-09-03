@@ -1,0 +1,76 @@
+name: Promise WispHub Shape Readonly
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/promise-wisphub-shape-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_readonly
+          chmod 600 ~/.ssh/hostinger_readonly
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Inspect promise payload keys without secrets
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_readonly -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="/home/$USER/domains/wifirapidito.com/public_html"
+          php -d display_errors=0 -r '
+            require $argv[1] . "/config_wisphub.php";
+            $url = rtrim(WISPHUB_API_URL, "/") . "/promesas-de-pago/?limit=200";
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+              CURLOPT_RETURNTRANSFER => true,
+              CURLOPT_HTTPHEADER => ["Authorization: Api-Key " . WISPHUB_TOKEN, "Accept: application/json"],
+              CURLOPT_CONNECTTIMEOUT => 5,
+              CURLOPT_TIMEOUT => 20,
+              CURLOPT_SSL_VERIFYPEER => true,
+              CURLOPT_SSL_VERIFYHOST => 2,
+            ]);
+            $body = curl_exec($ch);
+            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+            echo "http=$code\n";
+            $data = json_decode((string)$body, true);
+            if (!is_array($data)) { echo "json=invalid\n"; exit(0); }
+            echo "top_keys=" . implode(",", array_keys($data)) . "\n";
+            $rows = is_array($data["results"] ?? null) ? $data["results"] : (array_is_list($data) ? $data : []);
+            echo "rows=" . count($rows) . "\n";
+            if ($rows) echo "row_keys=" . implode(",", array_keys($rows[0])) . "\n";
+            foreach ($rows as $row) {
+              if (!is_array($row)) continue;
+              $encoded = strtolower(json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+              if (strpos($encoded, "leidycartagena") === false) continue;
+              $safe = [];
+              foreach (["id","id_promesa","id_factura","fecha_limite","fecha","estado","status","cumplida","pagada","cliente","usuario","servicio","id_servicio"] as $k) {
+                if (array_key_exists($k, $row)) $safe[$k] = $row[$k];
+              }
+              echo "match=" . json_encode($safe, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+            }
+          ' "$BASE"
+          REMOTE
