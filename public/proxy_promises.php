@@ -20,7 +20,7 @@ function promiseRespond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    promiseRespond(200, ['status' => 'ready', 'version' => '3.0-restriction-enforcement']);
+    promiseRespond(200, ['status' => 'ready', 'version' => '3.1-promise-ledger']);
 }
 
 require_once __DIR__ . '/config_wisphub.php';
@@ -88,10 +88,34 @@ function invoiceIdentifiers($invoice) {
     ];
 }
 
+function promiseDeadline($data) {
+    $value = trim((string) ($data['fecha_limite'] ?? $data['fecha_limite_de_pago'] ?? ''));
+    if ($value === '') return '';
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', substr($value, 0, 10));
+    return ($date && $date->format('Y-m-d') === substr($value, 0, 10)) ? $date->format('Y-m-d') : '';
+}
+
+function promiseClientSnapshot($invoice, $identifiers) {
+    $client = is_array($invoice['cliente'] ?? null) ? $invoice['cliente'] : [];
+    return [
+        'nombre' => trim((string) pr_first_value($client, ['nombre', 'name', 'cliente'], pr_first_value($invoice, ['nombre_cliente', 'cliente_nombre'], 'Cliente'))),
+        'id_servicio' => $identifiers['service_id'] ?? '',
+        'id_cliente' => $identifiers['client_id'] ?? '',
+        'usuario' => $identifiers['username'] ?? '',
+        'telefono' => $identifiers['phone'] ?? '',
+        'cedula' => trim((string) pr_first_value($client, ['cedula', 'documento', 'rif'], '')),
+        'correo' => trim((string) pr_first_value($client, ['correo', 'email'], '')),
+    ];
+}
+
 $raw = file_get_contents('php://input');
 $data = json_decode($raw, true);
 if (!is_array($data)) $data = $_POST;
 if (!is_array($data)) $data = [];
+
+$invoice = null;
+$identifiers = [];
+$invoiceId = 0;
 
 if ($method === 'POST') {
     $invoiceId = isset($data['id_factura']) ? (int) $data['id_factura'] : 0;
@@ -140,6 +164,25 @@ if ($response === null) {
 }
 
 if ($method === 'POST' && ($httpCode === 200 || $httpCode === 201)) {
+    $deadline = promiseDeadline($data);
+    if ($deadline !== '' && is_array($invoice) && $invoiceId > 0) {
+        $snapshot = promiseClientSnapshot($invoice, $identifiers);
+        $ledgerSaved = pr_record_promise([
+            'invoice_id' => (string) $invoiceId,
+            'deadline' => $deadline,
+            'service_id' => $identifiers['service_id'] ?? '',
+            'client_id' => $identifiers['client_id'] ?? '',
+            'username' => $identifiers['username'] ?? '',
+            'phone' => $identifiers['phone'] ?? '',
+            'client_name' => $snapshot['nombre'],
+            'cedula' => $snapshot['cedula'],
+            'email' => $snapshot['correo'],
+            'source' => 'proxy_promises',
+        ]);
+        promiseLog("Promise ledger invoice=$invoiceId deadline=$deadline saved=" . ($ledgerSaved ? 'yes' : 'no'));
+    } else {
+        promiseLog("Promise created but ledger metadata incomplete invoice=$invoiceId deadline=$deadline");
+    }
     sendPromiseEmailNotification($data);
 }
 
