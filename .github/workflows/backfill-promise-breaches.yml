@@ -36,155 +36,90 @@ jobs:
         run: |
           set -euo pipefail
           cat > /tmp/promise_breaches.tsv <<'EOF'
-oscarmartinez	2026-09-04	1a06ac9f187f760a
-dargenisaponte	2026-09-04	1a06ac9edee990e4
-celestemejias	2026-09-04	1a06ac9ecef763d8
-zuleikaaguilar	2026-09-04	1a06ac9ecb2c3ae2
-leidycartagena	2026-09-03	1a065a38e9a4a350
-soniasan	2026-09-02	1a06514b644aad3e
-elizabethmartinez	2026-09-01	1a05e8de1f95c873
-angelicacartagena	2026-09-01	1a05b56db1af1f45
-franksanz	2026-08-31	1a05ae81a4ae1b03
-mariatorres	2026-08-31	1a05adfdab470e73
-carolinazapata	2026-08-31	1a05addf4e589183
-barbarasanz	2026-08-31	1a05ad6a92229bd1
-ivonnerivero	2026-08-31	1a05ac7fcfba98f3
-mercedestorres	2026-08-31	1a05ac281b2b1402
-virginialiendo	2026-08-31	1a05ab86d3a01a45
-mirlaacevedo	2026-08-31	1a0563086a06f42a
-yulimar	2026-08-31	1a0563083c310411
-yaneisypalacios	2026-08-31	1a05630832fee22c
-hosmelisrodriguez	2026-08-31	1a0563081896af41
-maurelismata	2026-08-31	1a0563080dd64ea5
-davilsapalacios	2026-08-30	1a0559d0e5972ad3
-jackelinediaz	2026-08-30	1a0510a22bdb8eb6
-oliverruiz	2026-08-30	1a0510a210d7188d
-cristicurvelo	2026-08-30	1a0510a1ef0616bf
-luisblanco	2026-08-29	1a05095ce92ec738
-belkistorres	2026-08-29	1a050931529d4f1b
-vidaliasolorzano	2026-08-29	1a04be3c5b52340d
-EOF
-          scp -i ~/.ssh/hostinger -P 65002 /tmp/promise_breaches.tsv "$HOSTINGER_USER@$HOSTINGER_HOST:/tmp/promise_breaches.tsv"
+          oscarmartinez	2026-09-04	1a06ac9f187f760a
+          dargenisaponte	2026-09-04	1a06ac9edee990e4
+          celestemejias	2026-09-04	1a06ac9ecef763d8
+          zuleikaaguilar	2026-09-04	1a06ac9ecb2c3ae2
+          leidycartagena	2026-09-03	1a065a38e9a4a350
+          soniasan	2026-09-02	1a06514b644aad3e
+          elizabethmartinez	2026-09-01	1a05e8de1f95c873
+          angelicacartagena	2026-09-01	1a05b56db1af1f45
+          franksanz	2026-08-31	1a05ae81a4ae1b03
+          mariatorres	2026-08-31	1a05adfdab470e73
+          carolinazapata	2026-08-31	1a05addf4e589183
+          barbarasanz	2026-08-31	1a05ad6a92229bd1
+          ivonnerivero	2026-08-31	1a05ac7fcfba98f3
+          mercedestorres	2026-08-31	1a05ac281b2b1402
+          virginialiendo	2026-08-31	1a05ab86d3a01a45
+          mirlaacevedo	2026-08-31	1a0563086a06f42a
+          yulimar	2026-08-31	1a0563083c310411
+          yaneisypalacios	2026-08-31	1a05630832fee22c
+          hosmelisrodriguez	2026-08-31	1a0563081896af41
+          maurelismata	2026-08-31	1a0563080dd64ea5
+          davilsapalacios	2026-08-30	1a0559d0e5972ad3
+          jackelinediaz	2026-08-30	1a0510a22bdb8eb6
+          oliverruiz	2026-08-30	1a0510a210d7188d
+          cristicurvelo	2026-08-30	1a0510a1ef0616bf
+          luisblanco	2026-08-29	1a05095ce92ec738
+          belkistorres	2026-08-29	1a050931529d4f1b
+          vidaliasolorzano	2026-08-29	1a04be3c5b52340d
+          EOF
+          cat > /tmp/backfill_promises.php <<'PHP'
+          <?php
+          require "promise_restrictions_lib.php";
+          require "config_wisphub.php";
+          $lines=file("/tmp/promise_breaches.tsv",FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES);
+          $records=pr_load_records();
+          
+          function fetch_client_by_username(string $username): ?array {
+            $offset=0;$limit=300;
+            for($page=0;$page<40;$page++){
+              $url=rtrim(WISPHUB_API_URL,"/")."/clientes/?limit=$limit&offset=$offset";
+              $ch=curl_init($url);
+              curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"],CURLOPT_CONNECTTIMEOUT=>5,CURLOPT_TIMEOUT=>20]);
+              $body=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
+              if($body===false||$code<200||$code>=300)return null;
+              $d=json_decode($body,true);$batch=is_array($d["results"]??null)?$d["results"]:(is_array($d)&&array_is_list($d)?$d:[]);
+              foreach($batch as $c){if(!is_array($c))continue;$u=pr_normalize_username(pr_first_value($c,["usuario","usuario_portal","username"],""));if($u===$username)return $c;}
+              $n=count($batch);if($n===0)break;$offset+=$n;
+              $total=isset($d["count"])&&is_numeric($d["count"])?(int)$d["count"]:null;
+              if($total!==null&&$offset>=$total)break;
+              if($total===null&&$n<$limit&&empty($d["next"]))break;
+            }
+            return null;
+          }
+          
+          $created=0;$skipped=0;$errors=0;
+          foreach($lines as $line){
+            [$username,$incident,$msgid]=array_pad(explode("\t",$line),3,"");
+            $username=pr_normalize_username($username);$source="gmail:".$msgid;
+            $dup=false;foreach($records as $r){if(($r["source_event_id"]??"")===$source||($r["source_message_id"]??"")===$msgid){$dup=true;break;}}
+            if($dup){echo "SKIP_DUPLICATE $username\n";$skipped++;continue;}
+            $found=fetch_client_by_username($username);
+            if(!$found){echo "ERROR_CLIENT_NOT_FOUND $username\n";$errors++;continue;}
+            $ids=pr_identifiers_from_client($found);
+            $active=false;foreach($records as $existing){if(pr_record_is_active($existing)&&pr_records_match($existing,$ids)){$active=true;break;}}
+            if($active){echo "SKIP_ACTIVE $username\n";$skipped++;continue;}
+            $date=DateTimeImmutable::createFromFormat("!Y-m-d",$incident);
+            if(!$date){echo "ERROR_DATE $username\n";$errors++;continue;}
+            $ends=pr_add_months_clamped($date,3)->setTime(0,0,0);
+            $clientName=trim((string)pr_first_value($found,["nombre","nombre_cliente","name","cliente"],$username));
+            $records[]=[
+              "id"=>bin2hex(random_bytes(8)),"client_name"=>$clientName,"service_id"=>$ids["service_id"],"client_id"=>$ids["client_id"],"username"=>$ids["username"],"phone"=>$ids["phone"],
+              "cedula"=>trim((string)pr_first_value($found,["cedula","documento","rif"],"")),"email"=>trim((string)pr_first_value($found,["correo","email"],"")),
+              "reason"=>"Incumplimiento de promesa de pago","note"=>"Restricción automática recuperada desde notificación confirmada de WispHub.",
+              "incident_date"=>$incident,"starts_at"=>$date->setTime(0,0,0)->format(DATE_ATOM),"ends_at"=>$ends->format(DATE_ATOM),"created_at"=>date(DATE_ATOM),
+              "created_by"=>"wisphub-breach-backfill","source"=>"gmail-wisphub","source_event_id"=>$source,"source_message_id"=>$msgid,"revoked_at"=>null,"revoked_by"=>null
+            ];
+            $created++;echo "CREATED $username UNTIL ".$ends->format("Y-m-d")."\n";
+          }
+          if(!pr_save_records($records)){fwrite(STDERR,"Save failed\n");exit(5);}
+          echo "SUMMARY CREATED=$created SKIPPED=$skipped ERRORS=$errors\n";
+          
+          PHP
+          scp -i ~/.ssh/hostinger -P 65002 /tmp/promise_breaches.tsv /tmp/backfill_promises.php "$HOSTINGER_USER@$HOSTINGER_HOST:/tmp/"
           ssh -i ~/.ssh/hostinger -p 65002 -o BatchMode=yes "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
-          APP="$HOME/domains/wifirapidito.com/public_html"
-          cd "$APP"
-          php <<'PHP'
-<?php
-require "promise_restrictions_lib.php";
-require "config_wisphub.php";
-
-$lines = file("/tmp/promise_breaches.tsv", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-$records = pr_load_records();
-
-function fetch_client_by_username(string $username): ?array {
-    $offset=0; $limit=300;
-    for($page=0;$page<40;$page++){
-        $url=rtrim(WISPHUB_API_URL,"/")."/clientes/?limit=$limit&offset=$offset";
-        $ch=curl_init($url);
-        curl_setopt_array($ch,[
-            CURLOPT_RETURNTRANSFER=>true,
-            CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"],
-            CURLOPT_CONNECTTIMEOUT=>5,
-            CURLOPT_TIMEOUT=>20
-        ]);
-        $body=curl_exec($ch);
-        $code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        if($body===false || $code<200 || $code>=300) return null;
-        $d=json_decode($body,true);
-        $batch=is_array($d["results"]??null)?$d["results"]:(is_array($d)&&array_is_list($d)?$d:[]);
-        foreach($batch as $c){
-            if(!is_array($c)) continue;
-            $u=pr_normalize_username(pr_first_value($c,["usuario","usuario_portal","username"],""));
-            if($u===$username) return $c;
-        }
-        $n=count($batch);
-        if($n===0) break;
-        $offset += $n;
-        $total=isset($d["count"])&&is_numeric($d["count"])?(int)$d["count"]:null;
-        if($total!==null && $offset >= $total) break;
-        if($total===null && $n<$limit && empty($d["next"])) break;
-    }
-    return null;
-}
-
-$created=0; $skipped=0; $errors=0;
-foreach($lines as $line){
-    [$username,$incident,$msgid]=array_pad(explode("\t",$line),3,"");
-    $username=pr_normalize_username($username);
-    $source="gmail:".$msgid;
-
-    $duplicate=false;
-    foreach($records as $r){
-        if(($r["source_event_id"]??"")===$source || ($r["source_message_id"]??"")===$msgid){
-            $duplicate=true; break;
-        }
-    }
-    if($duplicate){
-        echo "SKIP_DUPLICATE $username\n";
-        $skipped++;
-        continue;
-    }
-
-    $found=fetch_client_by_username($username);
-    if(!$found){
-        echo "ERROR_CLIENT_NOT_FOUND $username\n";
-        $errors++;
-        continue;
-    }
-
-    $ids=pr_identifiers_from_client($found);
-    $existingActive=false;
-    foreach($records as $existing){
-        if(pr_record_is_active($existing) && pr_records_match($existing,$ids)){
-            $existingActive=true; break;
-        }
-    }
-    if($existingActive){
-        echo "SKIP_ACTIVE $username\n";
-        $skipped++;
-        continue;
-    }
-
-    $date=DateTimeImmutable::createFromFormat("!Y-m-d",$incident);
-    if(!$date){
-        echo "ERROR_DATE $username\n";
-        $errors++;
-        continue;
-    }
-    $ends=pr_add_months_clamped($date,3)->setTime(0,0,0);
-    $clientName=trim((string)pr_first_value($found,["nombre","nombre_cliente","name","cliente"],$username));
-    $record=[
-        "id"=>bin2hex(random_bytes(8)),
-        "client_name"=>$clientName,
-        "service_id"=>$ids["service_id"],
-        "client_id"=>$ids["client_id"],
-        "username"=>$ids["username"],
-        "phone"=>$ids["phone"],
-        "cedula"=>trim((string)pr_first_value($found,["cedula","documento","rif"],"")),
-        "email"=>trim((string)pr_first_value($found,["correo","email"],"")),
-        "reason"=>"Incumplimiento de promesa de pago",
-        "note"=>"Restricción automática recuperada desde notificación confirmada de WispHub.",
-        "incident_date"=>$incident,
-        "starts_at"=>$date->setTime(0,0,0)->format(DATE_ATOM),
-        "ends_at"=>$ends->format(DATE_ATOM),
-        "created_at"=>date(DATE_ATOM),
-        "created_by"=>"wisphub-breach-backfill",
-        "source"=>"gmail-wisphub",
-        "source_event_id"=>$source,
-        "source_message_id"=>$msgid,
-        "revoked_at"=>null,
-        "revoked_by"=>null
-    ];
-    $records[]=$record;
-    $created++;
-    echo "CREATED $username UNTIL ".$ends->format("Y-m-d")."\n";
-}
-if(!pr_save_records($records)){
-    fwrite(STDERR,"Save failed\n");
-    exit(5);
-}
-echo "SUMMARY CREATED=$created SKIPPED=$skipped ERRORS=$errors\n";
-PHP
+          cd "$HOME/domains/wifirapidito.com/public_html"
+          php /tmp/backfill_promises.php
           REMOTE
