@@ -21,7 +21,7 @@ function pr_respond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    pr_respond(200, ['status' => 'ready', 'version' => '1.2-ledger-reconciliation']);
+    pr_respond(200, ['status' => 'ready', 'version' => '1.3-ledger-sweep']);
 }
 
 require_once __DIR__ . '/promise_restrictions_lib.php';
@@ -175,11 +175,27 @@ function pr_pending_invoice_ids($saldoPayload) {
     return $ids;
 }
 
-function pr_reconcile_due_promises($identifiers) {
+function pr_all_due_promise_entries($today = null) {
+    $today = $today ?: date('Y-m-d');
+    $result = [];
+    foreach (pr_load_promise_ledger() as $entry) {
+        if (!is_array($entry)) continue;
+        if (!empty($entry['fulfilled_at']) || !empty($entry['breached_at'])) continue;
+        $deadline = trim((string) ($entry['deadline'] ?? ''));
+        if ($deadline === '' || $deadline >= $today) continue;
+        $result[] = $entry;
+    }
+    usort($result, fn($a, $b) => strcmp((string) ($a['deadline'] ?? ''), (string) ($b['deadline'] ?? '')));
+    return $result;
+}
+
+function pr_reconcile_due_promises($identifiers = null, $maxEntries = 100) {
     $tz = new DateTimeZone('America/Caracas');
     $today = (new DateTimeImmutable('now', $tz))->format('Y-m-d');
-    $dueEntries = pr_due_promise_entries($identifiers, $today);
-    if (!$dueEntries) return null;
+    $dueEntries = is_array($identifiers) ? pr_due_promise_entries($identifiers, $today) : pr_all_due_promise_entries($today);
+    if (!$dueEntries) return is_array($identifiers) ? null : ['checked' => 0, 'breached' => 0, 'fulfilled' => 0, 'errors' => 0];
+    $dueEntries = array_slice($dueEntries, 0, max(1, (int) $maxEntries));
+    $stats = ['checked' => 0, 'breached' => 0, 'fulfilled' => 0, 'errors' => 0];
 
     $saldoCache = [];
     foreach ($dueEntries as $entry) {
@@ -187,7 +203,11 @@ function pr_reconcile_due_promises($identifiers) {
         $invoiceId = trim((string) ($entry['invoice_id'] ?? ''));
         $deadline = trim((string) ($entry['deadline'] ?? ''));
         $ledgerKey = trim((string) ($entry['ledger_key'] ?? ''));
-        if ($serviceId === '' || $invoiceId === '' || $deadline === '' || $ledgerKey === '') continue;
+        if ($serviceId === '' || $invoiceId === '' || $deadline === '' || $ledgerKey === '') {
+            if (!is_array($identifiers)) $stats['errors']++;
+            continue;
+        }
+        if (!is_array($identifiers)) $stats['checked']++;
 
         if (!array_key_exists($serviceId, $saldoCache)) {
             $lookupError = null;
@@ -198,6 +218,7 @@ function pr_reconcile_due_promises($identifiers) {
             if (!is_array($saldoCache[$serviceId])) {
                 error_log('[PROMISE_RECONCILE] saldo unavailable service=' . $serviceId . ' error=' . ($lookupError ?: 'unknown'));
                 $saldoCache[$serviceId] = null;
+                if (!is_array($identifiers)) $stats['errors']++;
             }
         }
 
@@ -210,6 +231,7 @@ function pr_reconcile_due_promises($identifiers) {
                 'fulfilled_at' => date(DATE_ATOM),
                 'resolution' => 'invoice_not_pending_after_deadline_check',
             ]);
+            if (!is_array($identifiers)) $stats['fulfilled']++;
             continue;
         }
 
@@ -242,9 +264,10 @@ function pr_reconcile_due_promises($identifiers) {
             'restriction_id' => $restriction['id'] ?? null,
             'resolution' => 'invoice_still_pending_after_deadline',
         ]);
-        return $restriction;
+        if (is_array($identifiers)) return $restriction;
+        $stats['breached']++;
     }
-    return null;
+    return is_array($identifiers) ? null : $stats;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -263,6 +286,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         pr_respond(200, pr_public_payload($restriction));
     }
 
+    if ($action === 'reconcile') {
+        $token = trim((string) ($_GET['token'] ?? ''));
+        $expected = defined('PROMISE_RECONCILE_TOKEN') ? trim((string) PROMISE_RECONCILE_TOKEN) : '';
+        if ($expected === '' || $token === '' || !hash_equals($expected, $token)) {
+            pr_respond(403, ['error' => 'No autorizado.']);
+        }
+        $limit = min(500, max(1, (int) ($_GET['limit'] ?? 100)));
+        $stats = pr_reconcile_due_promises(null, $limit);
+        pr_respond(200, ['success' => true, 'reconciliation' => $stats, 'version' => '1.3-ledger-sweep']);
+    }
+
     if ($action === 'list') {
         pr_require_admin();
         $records = pr_load_records();
@@ -271,7 +305,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             $record['status'] = !empty($record['revoked_at']) ? 'revoked' : (pr_record_is_active($record) ? 'active' : 'expired');
             return $record;
         }, $records);
-        pr_respond(200, ['restrictions' => $result, 'version' => '1.2-ledger-reconciliation']);
+        pr_respond(200, ['restrictions' => $result, 'version' => '1.3-ledger-sweep']);
     }
 
     pr_respond(404, ['error' => 'Acción no encontrada.']);
