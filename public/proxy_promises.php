@@ -20,7 +20,7 @@ function promiseRespond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    promiseRespond(200, ['status' => 'ready', 'version' => '3.1-promise-ledger']);
+    promiseRespond(200, ['status' => 'ready', 'version' => '3.2-promise-deadline-2359']);
 }
 
 require_once __DIR__ . '/config_wisphub.php';
@@ -112,6 +112,19 @@ $raw = file_get_contents('php://input');
 $data = json_decode($raw, true);
 if (!is_array($data)) $data = $_POST;
 if (!is_array($data)) $data = [];
+
+// WispHub interpreta una fecha sin hora con una hora predeterminada temprana.
+// Toda promesa creada por nuestros canales vence al final del día seleccionado.
+if ($method === 'POST') {
+    $rawDeadline = trim((string) ($data['fecha_limite'] ?? $data['fecha_limite_de_pago'] ?? ''));
+    if ($rawDeadline !== '') {
+        $datePart = substr($rawDeadline, 0, 10);
+        $parsedDeadline = DateTimeImmutable::createFromFormat('!Y-m-d', $datePart);
+        if ($parsedDeadline && $parsedDeadline->format('Y-m-d') === $datePart) {
+            $data['fecha_limite'] = $datePart . ' 23:59:00';
+        }
+    }
+}
 
 $invoice = null;
 $identifiers = [];
