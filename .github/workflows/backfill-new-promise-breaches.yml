@@ -1,0 +1,94 @@
+name: Backfill New Promise Breaches
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths: ['.github/workflows/backfill-new-promise-breaches.yml']
+permissions:
+  contents: read
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Configure SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/h
+          chmod 600 ~/.ssh/h
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+      - name: Apply restrictions
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/new_promise_breaches.tsv <<'EOF'
+          miguellopez	2026-09-05	1a06ff05f55757ca
+          mariamanaure	2026-09-05	1a06ff05be618eb7
+          michellesanz	2026-09-05	1a06ff05af0e52ce
+          luisanaangarita	2026-09-05	1a06ff059e377963
+          cirilapalacios	2026-09-05	1a06ff057cc163d1
+          dialibetharenas	2026-09-05	1a06ff0570eb8622
+          zenaidabasalo	2026-09-05	1a06ff05709e30f9
+          mairelyshernandez	2026-09-05	1a06ff056ff3abb4
+          amintapantoja	2026-09-05	1a06ff056bb7da1e
+          yairaguerrero	2026-09-05	1a06ff051be371de
+          barbarapena	2026-09-05	1a06ff05129ec916
+          elizabethsojo	2026-09-05	1a06ff051035bada
+          mariahenriquez	2026-09-05	1a06ff0509813d96
+          EOF
+          cat > /tmp/new_backfill.php <<'PHP'
+          <?php
+          require "promise_restrictions_lib.php";
+          require "config_wisphub.php";
+          $lines=file("/tmp/new_promise_breaches.tsv",FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES);
+          $records=pr_load_records();
+          function fetch_client(string $username): ?array {
+            $offset=0;$limit=300;
+            for($page=0;$page<40;$page++){
+              $url=rtrim(WISPHUB_API_URL,"/")."/clientes/?limit=$limit&offset=$offset";
+              $ch=curl_init($url);
+              curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"],CURLOPT_CONNECTTIMEOUT=>5,CURLOPT_TIMEOUT=>20]);
+              $body=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
+              if($body===false||$code<200||$code>=300)return null;
+              $d=json_decode($body,true);$batch=is_array($d["results"]??null)?$d["results"]:(is_array($d)&&array_is_list($d)?$d:[]);
+              foreach($batch as $c){if(!is_array($c))continue;$u=pr_normalize_username(pr_first_value($c,["usuario","usuario_portal","username"],""));if($u===$username)return $c;}
+              $n=count($batch);if($n===0)break;$offset+=$n;
+              $total=isset($d["count"])&&is_numeric($d["count"])?(int)$d["count"]:null;
+              if($total!==null&&$offset>=$total)break;
+              if($total===null&&$n<$limit&&empty($d["next"]))break;
+            }
+            return null;
+          }
+          $created=0;$skipped=0;$errors=0;
+          foreach($lines as $line){
+            [$username,$incident,$msgid]=array_pad(explode("\t",$line),3,"");
+            $username=pr_normalize_username($username);$source="gmail:".$msgid;
+            $dup=false;foreach($records as $r){if(($r["source_event_id"]??"")===$source||($r["source_message_id"]??"")===$msgid){$dup=true;break;}}
+            if($dup){echo "SKIP_DUPLICATE $username\n";$skipped++;continue;}
+            $found=fetch_client($username);
+            if(!$found){echo "ERROR_CLIENT_NOT_FOUND $username\n";$errors++;continue;}
+            $ids=pr_identifiers_from_client($found);
+            $active=false;foreach($records as $existing){if(pr_record_is_active($existing)&&pr_records_match($existing,$ids)){$active=true;break;}}
+            if($active){echo "SKIP_ACTIVE $username\n";$skipped++;continue;}
+            $date=DateTimeImmutable::createFromFormat("!Y-m-d",$incident);
+            $ends=pr_add_months_clamped($date,3)->setTime(0,0,0);
+            $clientName=trim((string)pr_first_value($found,["nombre","nombre_cliente","name","cliente"],$username));
+            $records[]=["id"=>bin2hex(random_bytes(8)),"client_name"=>$clientName,"service_id"=>$ids["service_id"],"client_id"=>$ids["client_id"],"username"=>$ids["username"],"phone"=>$ids["phone"],
+              "cedula"=>trim((string)pr_first_value($found,["cedula","documento","rif"],"")),"email"=>trim((string)pr_first_value($found,["correo","email"],"")),
+              "reason"=>"Incumplimiento de promesa de pago","note"=>"Restricción automática recuperada desde notificación confirmada de WispHub.",
+              "incident_date"=>$incident,"starts_at"=>$date->setTime(0,0,0)->format(DATE_ATOM),"ends_at"=>$ends->format(DATE_ATOM),"created_at"=>date(DATE_ATOM),
+              "created_by"=>"wisphub-breach-backfill","source"=>"gmail-wisphub","source_event_id"=>$source,"source_message_id"=>$msgid,"revoked_at"=>null,"revoked_by"=>null];
+            $created++;echo "CREATED $username UNTIL ".$ends->format("Y-m-d")."\n";
+          }
+          if(!pr_save_records($records)){fwrite(STDERR,"Save failed\n");exit(5);}
+          echo "SUMMARY CREATED=$created SKIPPED=$skipped ERRORS=$errors\n";
+          
+          PHP
+          scp -i ~/.ssh/h -P 65002 /tmp/new_promise_breaches.tsv /tmp/new_backfill.php "$HOSTINGER_USER@$HOSTINGER_HOST:/tmp/"
+          ssh -i ~/.ssh/h -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'cd "$HOME/domains/wifirapidito.com/public_html" && php /tmp/new_backfill.php'
