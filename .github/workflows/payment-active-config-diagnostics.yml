@@ -1,0 +1,107 @@
+name: Payment Active Config Diagnostics
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/payment-active-config-diagnostics.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Inspect active Banesco runtime safely
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          FILE="$BASE/banesco_api.php"
+          PROXY="$BASE/proxy_payments.php"
+          test -s "$FILE"
+          test -s "$PROXY"
+
+          cat > /tmp/rapidito_inspect_banesco.php <<'PHP'
+          <?php
+          $file = $argv[1];
+          require $file;
+          echo "=== Runtime-selected configuration ===\n";
+          foreach (["BANESCO_ENV", "BANESCO_API_URL", "BANESCO_SSO_URL"] as $name) {
+              if (!defined($name)) { echo $name . "=undefined\n"; continue; }
+              $value = constant($name);
+              if (str_ends_with($name, "_URL")) {
+                  echo $name . "_host=" . (parse_url((string)$value, PHP_URL_HOST) ?: "invalid") . "\n";
+              } else {
+                  echo $name . "=" . preg_replace('/[^a-zA-Z0-9_-]/', '', (string)$value) . "\n";
+              }
+          }
+          foreach (["BANESCO_CLIENT_ID", "BANESCO_CLIENT_SECRET", "BANESCO_CLIENT_ID_PROD", "BANESCO_CLIENT_SECRET_PROD"] as $name) {
+              echo $name . "_configured=" . ((defined($name) && strlen((string)constant($name)) > 0) ? "yes" : "no") . "\n";
+          }
+
+          $ref = new ReflectionClass('BanescoAPI');
+          $method = $ref->getMethod('checkTransaction');
+          echo "check_required_params=" . $method->getNumberOfRequiredParameters() . "\n";
+          echo "check_total_params=" . $method->getNumberOfParameters() . "\n";
+          echo "check_start_line=" . $method->getStartLine() . "\n";
+          echo "check_end_line=" . $method->getEndLine() . "\n";
+
+          $lines = file($file);
+          $body = implode('', array_slice($lines, $method->getStartLine() - 1, $method->getEndLine() - $method->getStartLine() + 1));
+
+          preg_match_all('/\$options\s*\[\s*[\'\"]([^\'\"]+)[\'\"]\s*\]/', $body, $m);
+          $optionKeys = array_values(array_unique($m[1] ?? []));
+          sort($optionKeys);
+          echo "option_keys=" . implode(',', $optionKeys) . "\n";
+
+          echo "=== Option access lines (literals redacted) ===\n";
+          foreach (preg_split('/\R/', $body) as $line) {
+              if (strpos($line, '$options') === false) continue;
+              $line = preg_replace('/([\'\"])(?:(?!\1).)*\1/', "'<redacted>'", $line);
+              $line = preg_replace('/\s+/', ' ', trim($line));
+              echo $line . "\n";
+          }
+
+          echo "=== Banesco request payload expressions (string literals redacted) ===\n";
+          foreach (["referenceNumber", "accountId", "amount", "startDt", "endDt", "phoneNum", "bankId"] as $key) {
+              if (preg_match('/[\'\"]' . preg_quote($key, '/') . '[\'\"]\s*=>\s*([^,\r\n]+)/', $body, $match)) {
+                  $expr = preg_replace('/([\'\"])(?:(?!\1).)*\1/', "'<redacted>'", trim($match[1]));
+                  echo $key . "_expr=" . $expr . "\n";
+              } else {
+                  echo $key . "_expr=not_found\n";
+              }
+          }
+          PHP
+
+          php /tmp/rapidito_inspect_banesco.php "$FILE"
+          rm -f /tmp/rapidito_inspect_banesco.php
+
+          echo '=== Current proxy invocation ==='
+          grep -n 'BanescoAPI::checkTransaction' "$PROXY" | sed -E 's/[[:space:]]+/ /g' || true
+          echo 'proxy_fields_available:'
+          for field in amount banco_origen phone_emisor payment_date payment_type payment_type_label; do
+            if grep -q "$field" "$PROXY"; then echo "  $field=yes"; else echo "  $field=no"; fi
+          done
+          REMOTE

@@ -1,0 +1,86 @@
+name: Bot Admin Report Number Update
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-admin-report-number-update.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+      NEW_ADMIN_REPORT_NUMBER: '584242268245'
+    steps:
+      - name: Configure verified SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+
+      - name: Update production bot report number only
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          NEW_ADMIN_REPORT_NUMBER='584242268245'
+          test "$(docker inspect -f '{{.State.Running}}' bot_backend)" = true
+
+          old_name="bot_backend_reportnum_$(date +%Y%m%d-%H%M%S)"
+          image=$(docker inspect -f '{{.Config.Image}}' bot_backend)
+          restart=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' bot_backend)
+          network=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' bot_backend)
+
+          mapfile -t envs < <(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend | grep -v '^ADMIN_REPORT_NUMBER=')
+          env_args=()
+          for e in "${envs[@]}"; do env_args+=(--env "$e"); done
+          env_args+=(--env "ADMIN_REPORT_NUMBER=$NEW_ADMIN_REPORT_NUMBER")
+
+          docker rename bot_backend "$old_name"
+          docker stop "$old_name" >/dev/null
+
+          rollback() {
+            docker rm -f bot_backend >/dev/null 2>&1 || true
+            docker rename "$old_name" bot_backend >/dev/null 2>&1 || true
+            docker start bot_backend >/dev/null 2>&1 || true
+          }
+          trap rollback ERR
+
+          docker run -d \
+            --name bot_backend \
+            --restart "$restart" \
+            --network "$network" \
+            -p 5000:5000 \
+            "${env_args[@]}" \
+            "$image" >/dev/null
+
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:5000/webhook | grep -q '4.0-bot-10-opciones'; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5000/webhook | grep -q '4.0-bot-10-opciones'
+          actual=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend | sed -n 's/^ADMIN_REPORT_NUMBER=//p' | head -1)
+          test "$actual" = "$NEW_ADMIN_REPORT_NUMBER"
+          echo "ADMIN_REPORT_NUMBER_UPDATED=1"
+          echo "ROLLBACK_CONTAINER=$old_name"
+          trap - ERR
+          REMOTE

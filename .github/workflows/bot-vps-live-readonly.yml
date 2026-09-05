@@ -1,0 +1,103 @@
+name: Bot VPS Live Readonly
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-vps-live-readonly.yml'
+      - 'vps/LIVE_READONLY_TRIGGER'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
+          BOT_VPS_SSH_KEY: ${{ secrets.BOT_VPS_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BOT_VPS_HOST"
+          test -n "$BOT_VPS_PORT"
+          test -n "$BOT_VPS_USER"
+          test -n "$BOT_VPS_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$BOT_VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/rapidito
+          chmod 600 ~/.ssh/rapidito
+          ssh-keygen -y -f ~/.ssh/rapidito >/dev/null
+          ssh-keyscan -p "$BOT_VPS_PORT" "$BOT_VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Inspect production without changes
+        env:
+          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH=(ssh -i ~/.ssh/rapidito -p "$BOT_VPS_PORT" -o BatchMode=yes -o ConnectTimeout=10 "$BOT_VPS_USER@$BOT_VPS_HOST")
+          "${SSH[@]}" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          test -d "$APP"
+          cd "$APP"
+          echo "HOST=$(hostname)"
+          echo "USER=$(whoami)"
+          echo "APP_PRESENT=1"
+          test -f docker-compose.yml
+          test -f .env
+          test -f bot_logic.py
+          echo "COMPOSE_PRESENT=1"
+          echo "ENV_PRESENT=1"
+          echo "BOT_LOGIC_PRESENT=1"
+          docker --version
+          docker compose version
+          docker compose ps
+          echo "--- containers ---"
+          docker ps --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}}'
+          echo "--- local health ---"
+          curl -fsS --max-time 5 http://127.0.0.1:5000/webhook || true
+          echo
+          echo "--- evolution health ---"
+          curl -fsS --max-time 5 http://127.0.0.1:8080/ || true
+          echo
+          echo "--- safe env flags ---"
+          set -a
+          source .env
+          set +a
+          for v in EVO_API_KEY WISPHUB_API_KEY; do
+            if [[ -n "${!v:-}" ]]; then echo "$v=SET"; else echo "$v=MISSING"; fi
+          done
+          echo "INSTANCE_NAME=${INSTANCE_NAME:-rapidito_bot}"
+          if [[ -n "${EVO_API_KEY:-}" ]]; then
+            status=$(curl -sS --max-time 8 -o /tmp/evo_instances.json -w '%{http_code}' -H "apikey: $EVO_API_KEY" http://127.0.0.1:8080/instance/fetchInstances || true)
+            echo "EVOLUTION_INSTANCES_HTTP=$status"
+            if [[ "$status" == "200" ]]; then
+              python3 - <<'PY'
+import json
+try:
+    data=json.load(open('/tmp/evo_instances.json'))
+except Exception:
+    print('EVOLUTION_JSON=INVALID')
+    raise SystemExit
+items=data if isinstance(data,list) else data.get('instances',[]) if isinstance(data,dict) else []
+print('EVOLUTION_INSTANCE_COUNT='+str(len(items)))
+for item in items:
+    name=item.get('instanceName') or item.get('name') or item.get('instance',{}).get('instanceName') if isinstance(item,dict) else None
+    state=item.get('connectionStatus') or item.get('state') or item.get('instance',{}).get('state') if isinstance(item,dict) else None
+    if name:
+        print(f'EVOLUTION_INSTANCE={name} STATE={state}')
+PY
+            fi
+          fi
+          REMOTE

@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, reconstruccion-bot-10-opciones]
 
 permissions:
   contents: read
@@ -15,8 +15,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APK_VERSION: 6.0.2
-  APK_FILENAME: Wifi-Rapidito-6.0.2.apk
+  APK_VERSION: 6.0.3
+  APK_FILENAME: Wifi-Rapidito-6.0.3.apk
+  LEGACY_APK_FILENAME: Wifi-Rapidito-6.0.2.apk
 
 jobs:
   build-apk:
@@ -26,6 +27,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify promise restriction logic is included
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "promise_restrictions.php" src/pages/Client/PromiseGate.jsx
+          grep -q "<PromiseGate><RequestPromise /></PromiseGate>" src/App.jsx
+          grep -q "versionCode 603" android/app/build.gradle
+          grep -q 'versionName "6.0.3"' android/app/build.gradle
 
       - name: Use Node.js 22
         uses: actions/setup-node@v4
@@ -73,7 +83,7 @@ jobs:
           retention-days: 30
 
       - name: Configure Hostinger SSH
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -93,7 +103,7 @@ jobs:
             "$HOSTINGER_USER@$HOSTINGER_HOST" 'echo "Hostinger SSH connection verified for APK deploy."'
 
       - name: Deploy APK to Hostinger
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -103,6 +113,7 @@ jobs:
           REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
           REMOTE_NEXT="$REMOTE_BASE/$APK_FILENAME.next"
           REMOTE_VERSIONED="$REMOTE_BASE/$APK_FILENAME"
+          REMOTE_LEGACY="$REMOTE_BASE/$LEGACY_APK_FILENAME"
           REMOTE_STABLE="$REMOTE_BASE/Wifi-Rapidito.apk"
 
           scp -i ~/.ssh/hostinger_deploy -P 65002 \
@@ -110,31 +121,33 @@ jobs:
             "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_NEXT"
 
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
-            "test -s '$REMOTE_NEXT' && mv '$REMOTE_NEXT' '$REMOTE_VERSIONED' && cp '$REMOTE_VERSIONED' '$REMOTE_STABLE' && test -s '$REMOTE_STABLE'"
+            "test -s '$REMOTE_NEXT' && mv '$REMOTE_NEXT' '$REMOTE_VERSIONED' && cp '$REMOTE_VERSIONED' '$REMOTE_LEGACY' && cp '$REMOTE_VERSIONED' '$REMOTE_STABLE' && test -s '$REMOTE_VERSIONED' && test -s '$REMOTE_LEGACY' && test -s '$REMOTE_STABLE'"
 
-      - name: Verify public APK
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Verify public APK aliases
+        if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
-          URL="https://wifirapidito.com/$APK_FILENAME?sha=$GITHUB_SHA"
-          for attempt in {1..12}; do
-            rm -f apk-head.bin
-            if curl -fsS --range 0-3 "$URL" -o apk-head.bin; then
-              SIGNATURE="$(head -c 4 apk-head.bin | xxd -p)"
-              if [[ "$SIGNATURE" == "504b0304" ]]; then
-                echo "Public APK verified: $APK_FILENAME"
-                exit 0
+          for FILE in "$APK_FILENAME" "$LEGACY_APK_FILENAME" "Wifi-Rapidito.apk"; do
+            URL="https://wifirapidito.com/$FILE?sha=$GITHUB_SHA"
+            verified=0
+            for attempt in {1..12}; do
+              rm -f apk-head.bin
+              if curl -fsS --range 0-3 "$URL" -o apk-head.bin; then
+                SIGNATURE="$(head -c 4 apk-head.bin | xxd -p)"
+                if [[ "$SIGNATURE" == "504b0304" ]]; then
+                  verified=1
+                  break
+                fi
               fi
-            fi
-            echo "Waiting for APK propagation ($attempt/12)..."
-            sleep 5
+              sleep 5
+            done
+            test "$verified" = 1
+            echo "Public APK verified: $FILE"
           done
-          echo "APK could not be verified publicly."
-          exit 1
 
       - name: Publish Android APK deployment status
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: success() && github.event_name == 'push'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -145,5 +158,5 @@ jobs:
               sha: context.sha,
               state: 'success',
               context: 'Android APK Deploy',
-              description: 'APK built, deployed and publicly verified',
+              description: 'APK 6.0.3 built with promise restriction logic and published',
             });

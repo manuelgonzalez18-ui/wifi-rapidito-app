@@ -1,0 +1,119 @@
+name: Bot VPS Stage Reconstruction
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-vps-stage-reconstruction.yml'
+      - 'vps/STAGE_RECONSTRUCTION_TRIGGER'
+
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure verified SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+          echo 'SSH_READY=1'
+
+      - name: Create production backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          stamp=$(date +%Y%m%d-%H%M%S)
+          BACKUP=/root/rapidito-predeploy-$stamp
+          mkdir -p "$BACKUP/files"
+          chmod 700 "$BACKUP"
+          cd "$APP"
+          for f in .env docker-compose.yml Dockerfile.bot requirements-bot.txt bot_logic.py bot_entry.py bot_presentation.py bot_flows.py kommo_service.py; do
+            [[ -f "$f" ]] && cp -a "$f" "$BACKUP/files/$f"
+          done
+          docker inspect bot_backend > "$BACKUP/docker-inspect-bot_backend.json"
+          docker image inspect wifi-rapidito-bot:meta3 > "$BACKUP/docker-image-meta3.json" 2>/dev/null || true
+          printf '%s\n' "$BACKUP" > /root/rapidito-latest-predeploy-backup
+          echo "BACKUP_DIR=$BACKUP"
+          echo 'PRODUCTION_BACKUP_OK=1'
+          REMOTE
+
+      - name: Package reconstruction
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            bot_logic.py bot_entry.py bot_presentation.py bot_flows.py kommo_service.py
+            validate_bot_env.py
+            test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py
+            requirements-bot.txt Dockerfile.bot
+          )
+          for f in "${files[@]}"; do test -f "vps/$f"; done
+          tar -C vps -czf /tmp/rapidito-reconstruction.tgz "${files[@]}"
+          scp -i ~/.ssh/key -P "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            /tmp/rapidito-reconstruction.tgz "$TARGET_USER@$TARGET_HOST:/root/rapidito-reconstruction-${GITHUB_SHA}.tgz"
+
+      - name: Build and validate parallel image
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" \
+            "GITHUB_SHA='$GITHUB_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          SHORT=${GITHUB_SHA:0:12}
+          STAGE=/root/rapidito-stage-$SHORT
+          IMAGE=wifi-rapidito-bot:recon-$SHORT
+          SMOKE=rapidito_recon_smoke
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          tar -xzf "/root/rapidito-reconstruction-${GITHUB_SHA}.tgz" -C "$STAGE"
+          cd "$STAGE"
+
+          echo '--- BUILD ---'
+          docker build -f Dockerfile.bot -t "$IMAGE" .
+
+          echo '--- UNIT TESTS IN IMAGE ---'
+          docker run --rm "$IMAGE" python -m unittest \
+            test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py
+
+          echo '--- LIVE READ-ONLY PREFLIGHT ---'
+          docker run --rm --env-file "$APP/.env" "$IMAGE" python validate_bot_env.py --network
+
+          cleanup() { docker rm -f "$SMOKE" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          cleanup
+
+          echo '--- PARALLEL HTTP SMOKE ON 5001 ---'
+          docker run -d --rm --name "$SMOKE" --env-file "$APP/.env" -p 127.0.0.1:5001:5000 "$IMAGE" >/dev/null
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:5001/webhook > /tmp/recon-health.json 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cat /tmp/recon-health.json
+          grep -q '4.0-bot-10-opciones' /tmp/recon-health.json
+          echo 'PARALLEL_SMOKE_OK=1'
+          echo "STAGED_IMAGE=$IMAGE"
+          printf '%s\n' "$IMAGE" > /root/rapidito-staged-image
+          REMOTE

@@ -1,0 +1,78 @@
+name: WispHub Register Schema Readonly
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/wisphub-register-schema-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Inspect registrar-pago OPTIONS only
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          CONFIG="$HOME/domains/wifirapidito.com/public_html/config_wisphub.php"
+          test -s "$CONFIG"
+          php -r '
+            require $argv[1];
+            $invoice="9501";
+            $url=rtrim(WISPHUB_API_URL,"/")."/facturas/".$invoice."/registrar-pago/";
+            $ch=curl_init($url);
+            curl_setopt_array($ch,[
+              CURLOPT_RETURNTRANSFER=>true,
+              CURLOPT_CUSTOMREQUEST=>"OPTIONS",
+              CURLOPT_SSL_VERIFYPEER=>true,
+              CURLOPT_SSL_VERIFYHOST=>2,
+              CURLOPT_CONNECTTIMEOUT=>8,
+              CURLOPT_TIMEOUT=>20,
+              CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"]
+            ]);
+            $body=curl_exec($ch);
+            $code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);
+            $ctype=(string)curl_getinfo($ch,CURLINFO_CONTENT_TYPE);
+            $err=curl_error($ch);
+            curl_close($ch);
+            echo "options_http=".$code."\n";
+            echo "options_content_type=".preg_replace("/[^A-Za-z0-9\/+;=._ -]/","",$ctype)."\n";
+            echo "options_curl_error=".($err!==""?"yes":"no")."\n";
+            $data=is_string($body)?json_decode($body,true):null;
+            echo "options_json=".(is_array($data)?"yes":"no")."\n";
+            if (!is_array($data)) exit(0);
+            echo "top_keys=".implode(",",array_slice(array_keys($data),0,30))."\n";
+            $actions=$data["actions"]["POST"]??null;
+            if (is_array($actions)) {
+              foreach ($actions as $name=>$meta) {
+                $safe=preg_replace("/[^A-Za-z0-9_-]/","",(string)$name);
+                $type=is_array($meta)?preg_replace("/[^A-Za-z0-9_.-]/","",(string)($meta["type"]??"")):"";
+                $required=is_array($meta)&&array_key_exists("required",$meta)?(($meta["required"]??false)?"yes":"no"):"unknown";
+                echo "field_".$safe." type=".$type." required=".$required."\n";
+              }
+            }
+          ' "$CONFIG"
+          REMOTE

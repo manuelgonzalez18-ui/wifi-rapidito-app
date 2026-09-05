@@ -1,0 +1,118 @@
+name: Bot Runtime Capabilities
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-runtime-capabilities.yml'
+      - 'vps/LIVE_RUNTIME_CAPABILITIES_TRIGGER'
+
+permissions:
+  contents: read
+
+jobs:
+  capabilities:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+    steps:
+      - name: Configure and verify SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BOT_VPS_SSH_KEY_B64"
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          echo 'SSH_PRIVATE_KEY_OK=1'
+
+          timeout 10 ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          echo "HOST_FP=$actual_fp"
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+          echo 'HOST_IDENTITY_OK=1'
+
+      - name: Test SSH authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'echo SSH_AUTH_OK=1; hostname; whoami'
+
+      - name: Inspect Rapidito production read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          cd "$APP"
+          echo "HOST=$(hostname)"
+          echo "USER=$(whoami)"
+          test -f docker-compose.yml
+          test -f .env
+          echo 'APP_LAYOUT_OK=1'
+          docker --version
+          docker compose version
+
+          echo '--- RUNNING CONTAINERS ---'
+          docker ps --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}} PORTS={{.Ports}}'
+
+          echo '--- COMPOSE LABELS ---'
+          for c in bot_backend evolution_api redis_bot; do
+            if docker inspect "$c" >/dev/null 2>&1; then
+              echo "CONTAINER=$c"
+              docker inspect -f 'WORKDIR={{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$c"
+              docker inspect -f 'CONFIG={{index .Config.Labels "com.docker.compose.project.config_files"}}' "$c"
+              docker inspect -f 'PROJECT={{index .Config.Labels "com.docker.compose.project"}}' "$c"
+              docker inspect -f 'STATE={{.State.Status}} STARTED={{.State.StartedAt}}' "$c"
+            fi
+          done
+
+          echo '--- CURRENT COMPOSE SYNTAX ---'
+          set +e
+          docker compose config --quiet >/tmp/compose.out 2>/tmp/compose.err
+          compose_rc=$?
+          set -e
+          echo "COMPOSE_CONFIG_RC=$compose_rc"
+          sed -n '1,5p' /tmp/compose.err || true
+          awk 'NR<=8 { s=$0; match(s,/^[[:space:]]*/); ind=RLENGTH; sub(/^[[:space:]]*/,"",s); if (index(s,":")>0) { sub(/:.*/,"",s); printf("LINE=%d INDENT=%d KEY=%s\n",NR,ind,s) } else { printf("LINE=%d INDENT=%d KEY=<no-colon>\n",NR,ind) } }' docker-compose.yml
+
+          echo '--- ENV KEY NAMES ---'
+          grep -E '^[A-Za-z_][A-Za-z0-9_]*=' .env | cut -d= -f1 | sort -u | grep -E 'EVOLUTION|EVO|WISP|WHATSAPP|INSTANCE|ADMIN|BANESCO|BCV' || true
+
+          echo '--- BOT ENDPOINT ---'
+          curl -sS --max-time 5 -o /tmp/bot_health.txt -w 'BOT_HTTP=%{http_code}\n' http://127.0.0.1:5000/webhook || true
+          head -c 300 /tmp/bot_health.txt 2>/dev/null || true
+          echo
+
+          echo '--- EVOLUTION ENDPOINT ---'
+          curl -sS --max-time 5 -o /tmp/evo_root.txt -w 'EVOLUTION_HTTP=%{http_code}\n' http://127.0.0.1:8080/ || true
+          head -c 300 /tmp/evo_root.txt 2>/dev/null || true
+          echo
+
+          echo '--- BOT ENV CAPABILITIES ---'
+          bot_env=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend 2>/dev/null || true)
+          for name in WISPHUB_API_KEY WISPHUB_TOKEN EVO_API_KEY EVOLUTION_API_KEY AUTHENTICATION_API_KEY INSTANCE_NAME ADMIN_PHONE; do
+            if printf '%s\n' "$bot_env" | grep -q "^${name}="; then echo "$name=SET"; fi
+          done
+
+          echo '--- EVOLUTION INSTANCE STATE ---'
+          evo_env=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' evolution_api 2>/dev/null || true)
+          evo_key=$(printf '%s\n' "$evo_env" | sed -n -E 's/^(AUTHENTICATION_API_KEY|EVOLUTION_API_KEY|EVO_API_KEY)=//p' | head -1)
+          if [[ -n "$evo_key" ]]; then
+            code=$(curl -sS --max-time 8 -o /tmp/rapidito_instances.json -w '%{http_code}' -H "apikey: $evo_key" http://127.0.0.1:8080/instance/fetchInstances || true)
+            echo "EVOLUTION_INSTANCES_HTTP=$code"
+            if [[ "$code" = 200 ]]; then
+              grep -oE '"(instanceName|state|connectionStatus)"[[:space:]]*:[[:space:]]*"[^"]*"' /tmp/rapidito_instances.json | head -30 || true
+            fi
+          else
+            echo 'EVOLUTION_CONTAINER_API_KEY=MISSING'
+          fi
+          REMOTE

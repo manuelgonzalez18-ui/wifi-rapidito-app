@@ -1,0 +1,161 @@
+name: Bot Evolution Report Channel Check
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-evolution-report-channel-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+      NEW_ADMIN_REPORT_NUMBER: '584242268245'
+    steps:
+      - name: Configure and verify SSH identity
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          : > ~/.ssh/known_hosts
+
+          connected=0
+          for attempt in {1..8}; do
+            if ssh -i ~/.ssh/key -p "$SSH_PORT" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=10 \
+              -o StrictHostKeyChecking=accept-new \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$TARGET_USER@$TARGET_HOST" true; then
+              connected=1
+              break
+            fi
+            sleep 4
+          done
+          test "$connected" = 1
+          test -s ~/.ssh/known_hosts
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+          echo 'SSH_IDENTITY_VERIFIED=1'
+
+      - name: Verify admin report number in production
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          NEW_ADMIN_REPORT_NUMBER='584242268245'
+          test "$(docker inspect -f '{{.State.Running}}' bot_backend)" = true
+          current=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend | sed -n 's/^ADMIN_REPORT_NUMBER=//p' | head -1)
+          test "$current" = "$NEW_ADMIN_REPORT_NUMBER"
+          curl -fsS http://127.0.0.1:5000/webhook | grep -q '4.0-bot-10-opciones'
+          echo 'ADMIN_REPORT_NUMBER_VERIFIED=1'
+          REMOTE
+
+      - name: Send controlled admin report test through Meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          envdump=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend)
+          token=$(printf '%s\n' "$envdump" | sed -n 's/^META_ACCESS_TOKEN=//p' | head -1)
+          phone_id=$(printf '%s\n' "$envdump" | sed -n 's/^META_PHONE_NUMBER_ID=//p' | head -1)
+          graph_ver=$(printf '%s\n' "$envdump" | sed -n 's/^META_GRAPH_VERSION=//p' | head -1)
+          admin=$(printf '%s\n' "$envdump" | sed -n 's/^ADMIN_REPORT_NUMBER=//p' | head -1)
+          graph_ver=${graph_ver:-v23.0}
+          test -n "$token"
+          test -n "$phone_id"
+          test "$admin" = '584242268245'
+
+          python3 - "$admin" > /tmp/meta-admin-test-payload.json <<'PY'
+          import json, sys
+          print(json.dumps({
+              'messaging_product': 'whatsapp',
+              'recipient_type': 'individual',
+              'to': sys.argv[1],
+              'type': 'text',
+              'text': {
+                  'preview_url': False,
+                  'body': '🧪 Prueba de reportes internos Rapidito 4.0\n\nDestino de reportes actualizado correctamente.'
+              }
+          }, ensure_ascii=False))
+          PY
+
+          code=$(curl -sS --max-time 15 -o /tmp/meta-admin-test-response.json -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' \
+            --data-binary @/tmp/meta-admin-test-payload.json \
+            "https://graph.facebook.com/$graph_ver/$phone_id/messages" || true)
+          echo "META_ADMIN_REPORT_TEST_HTTP=$code"
+
+          python3 - "$code" <<'PY'
+          import json, sys
+          code = sys.argv[1]
+          try:
+              with open('/tmp/meta-admin-test-response.json', 'r', encoding='utf-8') as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+          if code.startswith('2'):
+              messages = data.get('messages') if isinstance(data, dict) else None
+              accepted = bool(messages and isinstance(messages, list) and messages[0].get('id'))
+              print('META_ADMIN_REPORT_TEST_ACCEPTED=' + ('1' if accepted else '0'))
+          else:
+              err = data.get('error') if isinstance(data, dict) else {}
+              if not isinstance(err, dict):
+                  err = {}
+              print('META_ADMIN_REPORT_TEST_ACCEPTED=0')
+              print('META_ERROR_CODE=' + str(err.get('code', '')))
+              print('META_ERROR_SUBCODE=' + str(err.get('error_subcode', '')))
+              msg = str(err.get('message', '')).replace('\n', ' ')[:240]
+              print('META_ERROR_MESSAGE=' + msg)
+          PY
+          REMOTE
+
+      - name: Check Evolution connection without exposing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          envdump=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend)
+          api_key=$(printf '%s\n' "$envdump" | sed -n 's/^EVO_API_KEY=//p' | head -1)
+          test -n "$api_key"
+
+          code=$(curl -sS --max-time 10 -o /tmp/evo-instances.json -w '%{http_code}' \
+            -H "apikey: $api_key" http://127.0.0.1:8080/instance/fetchInstances || true)
+          echo "EVOLUTION_FETCH_HTTP=$code"
+          test "$code" = 200
+
+          state_code=$(curl -sS --max-time 10 -o /tmp/evo-state.json -w '%{http_code}' \
+            -H "apikey: $api_key" http://127.0.0.1:8080/instance/connectionState/rapidito_bot || true)
+          echo "EVOLUTION_STATE_HTTP=$state_code"
+          if [ "$state_code" = 200 ]; then
+            python3 - <<'PY'
+          import json
+          with open('/tmp/evo-state.json', 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          instance = data.get('instance') if isinstance(data, dict) else {}
+          if not isinstance(instance, dict):
+              instance = {}
+          state = instance.get('state') or (data.get('state') if isinstance(data, dict) else '') or (data.get('connectionStatus') if isinstance(data, dict) else '') or ''
+          print('EVOLUTION_CONNECTION_STATE=' + str(state))
+          PY
+          else
+            echo 'EVOLUTION_CONNECTION_STATE=unknown'
+          fi
+          REMOTE

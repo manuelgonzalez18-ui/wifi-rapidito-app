@@ -1,0 +1,94 @@
+# Read-only production diagnostic
+name: Balance and Banesco Logic Readonly
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/balance-banesco-logic-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Read official balance endpoint and active Banesco decision logic
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          cat > /tmp/rapidito_balance_logic.php <<'PHP'
+          <?php
+          $base=$argv[1];
+          require $base.'/config_wisphub.php';
+          function getw($path,$params=[]){
+            $url=rtrim(WISPHUB_API_URL,'/').'/'.ltrim($path,'/');
+            if($params)$url.='?'.http_build_query($params);
+            $ch=curl_init($url);
+            curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_HTTPHEADER=>['Authorization: Api-Key '.WISPHUB_TOKEN,'Accept: application/json']]);
+            $raw=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);$err=curl_error($ch);curl_close($ch);
+            return [$code,$err,json_decode((string)$raw,true)];
+          }
+          echo "=== Official WispHub balance 412 ===\n";
+          [$code,$err,$bal]=getw('clientes/412/saldo/');
+          echo "saldo_http=$code\nsaldo_curl_error=".($err?'yes':'no')."\n";
+          if(is_array($bal)){
+            echo 'saldo_value='.(string)($bal['saldo']??'')."\n";
+            echo 'saldo_estado='.(string)($bal['estado']??'')."\n";
+            $facts=is_array($bal['facturas']??null)?$bal['facturas']:[];
+            echo 'saldo_facturas_count='.count($facts)."\n";
+            foreach(array_slice($facts,0,10) as $i=>$f){
+              echo 'saldo_factura_'.$i.'='.json_encode(['id'=>$f['id']??$f['id_factura']??'','total'=>$f['total']??'','fecha_emision'=>$f['fecha_emision']??'','fecha_vencimiento'=>$f['fecha_vencimiento']??''],JSON_UNESCAPED_SLASHES)."\n";
+            }
+          }
+          echo "=== Client 412 exact invoice filter ===\n";
+          [$cc,$ce,$client]=getw('clientes/412/');
+          if($cc===200 && is_array($client)){
+            $username=(string)($client['usuario']??'');
+            echo 'client_exact_has_usuario='.($username!==''?'yes':'no')."\n";
+            if($username!==''){
+              [$ic,$ie,$idata]=getw('facturas/',['cliente'=>$username,'limit'=>100]);
+              echo "facturas_cliente_http=$ic\n";
+              echo 'facturas_cliente_count='.(is_array($idata)?(int)($idata['count']??count($idata['results']??[])):0)."\n";
+              foreach(array_slice($idata['results']??[],0,10) as $i=>$f){
+                echo 'factura_cliente_'.$i.'='.json_encode(['id'=>$f['id_factura']??$f['id']??'','estado'=>$f['estado']??'','total'=>$f['total']??''],JSON_UNESCAPED_SLASHES)."\n";
+              }
+            }
+          } else echo "client_412_detail_http=$cc\n";
+          echo "=== Active Banesco decision logic ===\n";
+          require $base.'/banesco_api.php';
+          $r=new ReflectionClass('BanescoAPI');$m=$r->getMethod('checkTransaction');
+          $lines=file($base.'/banesco_api.php');
+          $body=array_slice($lines,$m->getStartLine()-1,$m->getEndLine()-$m->getStartLine()+1);
+          foreach($body as $i=>$line){
+            if(!preg_match('/transactionDetail|sourceBankId|destBankId|trnType|referenceNumber|amount|bankId|success|return|statusCode|statusDesc|phoneNum/i',$line))continue;
+            $line=preg_replace('/\b\d{7,}\b/','<num>',$line);
+            $line=preg_replace('/\s+/',' ',trim($line));
+            echo 'logic_'.($m->getStartLine()+$i).'='.$line."\n";
+          }
+          PHP
+          php /tmp/rapidito_balance_logic.php "$BASE"
+          rm -f /tmp/rapidito_balance_logic.php
+          REMOTE

@@ -1,0 +1,60 @@
+name: Bot VPS Invoice Postdeploy Verify
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-vps-invoice-postdeploy-verify.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+    steps:
+      - name: Configure verified SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+
+      - name: Verify running bot and WispHub invoice lookup
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          echo "BOT_IMAGE=$(docker inspect -f '{{.Config.Image}}' bot_backend)"
+          echo "BOT_RUNNING=$(docker inspect -f '{{.State.Running}}' bot_backend)"
+          echo "EVO_RUNNING=$(docker inspect -f '{{.State.Running}}' evolution_api)"
+          echo "REDIS_RUNNING=$(docker inspect -f '{{.State.Running}}' redis_bot)"
+          echo -n 'BOT_HEALTH='
+          curl -fsS http://127.0.0.1:5000/webhook
+          echo
+
+          docker exec bot_backend python -c "import asyncio, json, bot_logic; rows=asyncio.run(bot_logic.load_pending_invoices({'service_id':'412','username':''})); print('BOT_INVOICE_LOOKUP='+json.dumps([{'id':bot_logic.invoice_id(x),'total':x.get('total'),'estado':x.get('estado')} for x in rows], ensure_ascii=False))"
+
+          image="$(docker inspect -f '{{.Config.Image}}' bot_backend)"
+          test "$image" = 'wifi-rapidito-bot:recon-bd93dcb828ed'
+          docker inspect -f '{{.State.Running}}' bot_backend | grep -q true
+          docker inspect -f '{{.State.Running}}' evolution_api | grep -q true
+          docker inspect -f '{{.State.Running}}' redis_bot | grep -q true
+          curl -fsS http://127.0.0.1:5000/webhook | grep -q '4.0-bot-10-opciones'
+          docker exec bot_backend python -c "import asyncio, bot_logic; rows=asyncio.run(bot_logic.load_pending_invoices({'service_id':'412','username':''})); assert any(bot_logic.invoice_id(x)=='8990' and float(x.get('total') or 0)==25 for x in rows)"
+          echo 'BOT_INVOICE_POSTDEPLOY_OK=1'
+          REMOTE

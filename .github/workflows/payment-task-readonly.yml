@@ -1,0 +1,83 @@
+name: Payment Task Readonly
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/payment-task-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          for i in 1 2 3; do
+            ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && break
+            sleep 2
+          done
+          test -s ~/.ssh/known_hosts
+
+      - name: Inspect WispHub payment activation task without writes
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        run: |
+          set -euo pipefail
+          ssh -o ConnectTimeout=15 -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          PRIVATE="$(dirname "$BASE")/.wifi-rapidito-private"
+          STORE="$PRIVATE/validated-payments.json"
+          cat > /tmp/check_payment_task.php <<'PHP'
+          <?php
+          $base=$argv[1]; $store=$argv[2]; require $base.'/config_wisphub.php';
+          $records=is_file($store)?json_decode((string)file_get_contents($store),true):[];
+          $record=null;
+          if(is_array($records)) foreach($records as $r){
+            if(is_array($r) && (string)($r['invoice_id']??'')==='9501'){ $record=$r; break; }
+          }
+          if(!is_array($record)){ echo "record_found=no\n"; exit; }
+          $serviceId=preg_replace('/[^0-9]/','',(string)($record['service_id']??''));
+          $taskId=(string)($record['wisphub']['task_id']??'');
+          echo 'record='.json_encode([
+            'status'=>$record['status']??'',
+            'invoice_id'=>$record['invoice_id']??'',
+            'service_id'=>$serviceId,
+            'task_id'=>$taskId!==''?'present':'missing'
+          ],JSON_UNESCAPED_SLASHES)."\n";
+          function getJson($url){
+            $ch=curl_init($url);
+            curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_HTTPHEADER=>['Authorization: Api-Key '.WISPHUB_TOKEN,'Accept: application/json']]);
+            $raw=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);$err=curl_error($ch);curl_close($ch);
+            return [$code,$err,json_decode((string)$raw,true),(string)$raw];
+          }
+          if($taskId!==''){
+            [$code,$err,$task,$raw]=getJson(rtrim(WISPHUB_API_URL,'/').'/tasks/'.rawurlencode($taskId).'/');
+            echo "task_http=$code\n";
+            if($err!=='') echo "task_curl_error=yes\n";
+            if(is_array($task)) echo 'task='.json_encode($task,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n";
+            else echo 'task_body_prefix='.substr(preg_replace('/\s+/',' ',$raw),0,400)."\n";
+          }
+          if($serviceId!==''){
+            [$code,$err,$saldo,$raw]=getJson(rtrim(WISPHUB_API_URL,'/').'/clientes/'.rawurlencode($serviceId).'/saldo/');
+            echo "balance_http=$code\n";
+            if(is_array($saldo)) echo 'balance='.json_encode(['saldo'=>$saldo['saldo']??null,'estado'=>$saldo['estado']??null,'pending_count'=>is_array($saldo['facturas']??null)?count($saldo['facturas']):null],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n";
+          }
+          PHP
+          php /tmp/check_payment_task.php "$BASE" "$STORE"
+          rm -f /tmp/check_payment_task.php
+          REMOTE

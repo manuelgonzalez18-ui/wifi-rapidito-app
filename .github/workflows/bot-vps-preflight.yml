@@ -1,0 +1,112 @@
+name: Bot VPS Preflight
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-vps-preflight.yml'
+      - 'vps/LIVE_PREFLIGHT_TRIGGER'
+
+permissions:
+  contents: read
+
+jobs:
+  preflight-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH key
+        env:
+          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
+          BOT_VPS_SSH_KEY: ${{ secrets.BOT_VPS_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BOT_VPS_HOST"
+          test -n "$BOT_VPS_PORT"
+          test -n "$BOT_VPS_USER"
+          test -n "$BOT_VPS_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$BOT_VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/rapidito_deploy
+          chmod 600 ~/.ssh/rapidito_deploy
+          ssh-keygen -y -f ~/.ssh/rapidito_deploy >/dev/null
+          ssh-keyscan -p "$BOT_VPS_PORT" "$BOT_VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "BOT_DIR=/home/bot.local/public_html" >> "$GITHUB_ENV"
+
+      - name: Read-only production inspection
+        env:
+          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH=(ssh -i ~/.ssh/rapidito_deploy -p "$BOT_VPS_PORT" -o BatchMode=yes -o ConnectTimeout=10 "$BOT_VPS_USER@$BOT_VPS_HOST")
+          "${SSH[@]}" "BOT_DIR='$BOT_DIR' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$BOT_DIR"
+          echo "HOST=$(hostname)"
+          echo "USER=$(whoami)"
+          test -f docker-compose.yml
+          test -f .env
+          test -f bot_logic.py
+          echo "APP_LAYOUT_OK=1"
+          docker --version
+          docker compose version
+          docker compose ps
+          docker ps --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}}'
+          echo "BOT_HEALTH_BEGIN"
+          curl -fsS --max-time 5 http://127.0.0.1:5000/webhook || true
+          echo
+          echo "BOT_HEALTH_END"
+          echo "EVOLUTION_HEALTH_BEGIN"
+          curl -fsS --max-time 5 http://127.0.0.1:8080/ || true
+          echo
+          echo "EVOLUTION_HEALTH_END"
+          set -a
+          source .env
+          set +a
+          [[ -n "${EVO_API_KEY:-}" ]] && echo 'EVO_API_KEY=SET' || echo 'EVO_API_KEY=MISSING'
+          [[ -n "${WISPHUB_API_KEY:-}" ]] && echo 'WISPHUB_API_KEY=SET' || echo 'WISPHUB_API_KEY=MISSING'
+          echo "INSTANCE_NAME=${INSTANCE_NAME:-rapidito_bot}"
+          if [[ -n "${EVO_API_KEY:-}" ]]; then
+            code=$(curl -sS --max-time 8 -o /tmp/rapidito_instances.json -w '%{http_code}' -H "apikey: $EVO_API_KEY" http://127.0.0.1:8080/instance/fetchInstances || true)
+            echo "EVOLUTION_INSTANCES_HTTP=$code"
+            if [[ "$code" == "200" ]]; then
+              python3 - <<'PY'
+import json
+p='/tmp/rapidito_instances.json'
+try:
+    data=json.load(open(p))
+except Exception:
+    print('EVOLUTION_JSON=INVALID')
+    raise SystemExit
+items=data if isinstance(data,list) else data.get('instances',[]) if isinstance(data,dict) else []
+print('EVOLUTION_INSTANCE_COUNT='+str(len(items)))
+for item in items:
+    if not isinstance(item,dict):
+        continue
+    nested=item.get('instance') if isinstance(item.get('instance'),dict) else {}
+    name=item.get('instanceName') or item.get('name') or nested.get('instanceName')
+    state=item.get('connectionStatus') or item.get('state') or nested.get('state') or nested.get('status')
+    if name:
+        print(f'EVOLUTION_INSTANCE={name} STATE={state}')
+PY
+            fi
+          fi
+          REMOTE
+
+      - name: Confirm no restart occurred
+        env:
+          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/rapidito_deploy -p "$BOT_VPS_PORT" -o BatchMode=yes "$BOT_VPS_USER@$BOT_VPS_HOST" "cd '$BOT_DIR' && docker compose ps bot_backend evolution_api"

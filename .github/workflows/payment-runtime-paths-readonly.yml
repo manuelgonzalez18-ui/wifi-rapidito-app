@@ -1,0 +1,112 @@
+name: Payment Runtime Paths Readonly
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/payment-runtime-paths-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Inspect active payment storage and WispHub host
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          LIB="$BASE/payment_registry_lib.php"
+          CONFIG="$BASE/config_wisphub.php"
+          PROXY="$BASE/proxy_payments.php"
+          test -s "$LIB"
+          test -s "$CONFIG"
+          test -s "$PROXY"
+
+          echo '=== Live registry contract ==='
+          php -r '
+            require $argv[1];
+            $path=payment_registry_store_path();
+            echo "registry_basename=" . basename($path) . "\n";
+            echo "registry_exists=" . (is_file($path) ? "yes" : "no") . "\n";
+            $records=payment_registry_all_records();
+            echo "registry_records=" . count($records) . "\n";
+            $counts=[];
+            foreach ($records as $r) {
+              if (!is_array($r)) continue;
+              $s=(string)($r["status"] ?? "unknown");
+              $counts[$s]=($counts[$s]??0)+1;
+            }
+            ksort($counts);
+            foreach ($counts as $s=>$n) echo "status_" . preg_replace("/[^A-Za-z0-9_-]/","_",$s) . "=" . $n . "\n";
+          ' "$LIB"
+
+          echo '=== Registration errors sanitized ==='
+          php -r '
+            require $argv[1];
+            foreach (payment_registry_all_records() as $r) {
+              if (!is_array($r) || (($r["status"] ?? "") !== "registration_error")) continue;
+              $invoice=preg_replace("/[^0-9]/", "", (string)($r["invoice_id"] ?? ""));
+              $source=preg_replace("/[^A-Za-z0-9_-]/", "", (string)($r["source"] ?? "unknown"));
+              $error=preg_replace("/\s+/", " ", trim((string)($r["registration_error"] ?? "")));
+              echo "invoice=" . ($invoice ?: "unknown") . " source=" . ($source ?: "unknown") . " error=" . substr($error,0,220) . "\n";
+            }
+          ' "$LIB"
+
+          echo '=== Live WispHub config ==='
+          php -r '
+            require $argv[1];
+            $v=defined("WISPHUB_API_URL") ? (string)WISPHUB_API_URL : "";
+            echo "WISPHUB_API_URL_host=" . (parse_url($v, PHP_URL_HOST) ?: "invalid") . "\n";
+            echo "WISPHUB_API_URL_path=" . (parse_url($v, PHP_URL_PATH) ?: "/") . "\n";
+            echo "WISPHUB_TOKEN_configured=" . ((defined("WISPHUB_TOKEN") && strlen((string)WISPHUB_TOKEN)>0) ? "yes" : "no") . "\n";
+          ' "$CONFIG"
+
+          echo '=== Read-only host comparison ==='
+          php -r '
+            require $argv[1];
+            if (!defined("WISPHUB_TOKEN") || WISPHUB_TOKEN === "") { echo "token_missing\n"; exit(0); }
+            $invoice="9501";
+            foreach (["app"=>"https://api.wisphub.app/api/facturas/$invoice/", "net"=>"https://api.wisphub.net/api/facturas/$invoice/"] as $label=>$url) {
+              $ch=curl_init($url);
+              curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>20,CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"]]);
+              $body=curl_exec($ch);
+              $code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);
+              $ctype=(string)curl_getinfo($ch,CURLINFO_CONTENT_TYPE);
+              $err=curl_error($ch);
+              curl_close($ch);
+              echo $label . "_http=" . $code . "\n";
+              echo $label . "_content_type=" . preg_replace("/[^A-Za-z0-9\/+;=._ -]/","",$ctype) . "\n";
+              echo $label . "_curl_error=" . ($err!=="" ? "yes" : "no") . "\n";
+              echo $label . "_json=" . ((is_string($body) && is_array(json_decode($body,true))) ? "yes" : "no") . "\n";
+            }
+          ' "$CONFIG"
+
+          echo '=== Live proxy WispHub URL construction ==='
+          grep -nE 'WISPHUB_API_URL|registrar-pago|reportar-pago' "$PROXY" | sed -E 's/[[:space:]]+/ /g' | head -30 || true
+          REMOTE

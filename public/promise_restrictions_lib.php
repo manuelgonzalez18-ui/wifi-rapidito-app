@@ -40,6 +40,34 @@ function pr_save_records($records) {
     return true;
 }
 
+function pr_promise_ledger_path() {
+    return pr_private_directory() . '/promise-ledger.json';
+}
+
+function pr_load_promise_ledger() {
+    $path = pr_promise_ledger_path();
+    if (!is_file($path)) return [];
+    $raw = @file_get_contents($path);
+    if ($raw === false || trim($raw) === '') return [];
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
+function pr_save_promise_ledger($records) {
+    $path = pr_promise_ledger_path();
+    $encoded = json_encode(array_values($records), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+    if ($encoded === false) return false;
+    $tmp = $path . '.tmp';
+    if (@file_put_contents($tmp, $encoded, LOCK_EX) === false) return false;
+    @chmod($tmp, 0600);
+    if (!@rename($tmp, $path)) {
+        @unlink($tmp);
+        return false;
+    }
+    @chmod($path, 0600);
+    return true;
+}
+
 function pr_normalize_username($value) {
     $value = strtolower(trim((string) $value));
     if (str_ends_with($value, '@wifi-rapidito')) {
@@ -144,6 +172,112 @@ function pr_add_months_clamped($date, $months) {
     $lastDay = (int) (new DateTimeImmutable(sprintf('%04d-%02d-01', $targetYear, $targetMonth)))->modify('last day of this month')->format('j');
     $targetDay = min($day, $lastDay);
     return new DateTimeImmutable(sprintf('%04d-%02d-%02d', $targetYear, $targetMonth, $targetDay));
+}
+
+function pr_create_restriction_record($client, $incidentDate, $source = 'automatic', $note = '', $createdBy = 'system') {
+    if (!is_array($client)) return null;
+    $date = $incidentDate instanceof DateTimeImmutable
+        ? $incidentDate
+        : DateTimeImmutable::createFromFormat('!Y-m-d', trim((string) $incidentDate));
+    if (!$date) return null;
+
+    $ids = pr_identifiers_from_client($client);
+    if (count(array_filter($ids, fn($value) => $value !== '')) < 2) return null;
+
+    $existing = pr_find_active_restriction($ids);
+    if ($existing) return $existing;
+
+    $startsAt = $date->setTime(0, 0, 0);
+    $endsAt = pr_add_months_clamped($date, 3)->setTime(0, 0, 0);
+    $records = pr_load_records();
+    $record = [
+        'id' => bin2hex(random_bytes(8)),
+        'client_name' => trim((string) pr_first_value($client, ['nombre', 'name', 'cliente'], 'Cliente')),
+        'service_id' => $ids['service_id'],
+        'client_id' => $ids['client_id'],
+        'username' => $ids['username'],
+        'phone' => $ids['phone'],
+        'cedula' => trim((string) pr_first_value($client, ['cedula', 'documento', 'rif'], '')),
+        'email' => trim((string) pr_first_value($client, ['correo', 'email'], '')),
+        'reason' => 'Incumplimiento de promesa de pago',
+        'note' => substr(trim((string) $note), 0, 500),
+        'incident_date' => $date->format('Y-m-d'),
+        'starts_at' => $startsAt->format(DATE_ATOM),
+        'ends_at' => $endsAt->format(DATE_ATOM),
+        'created_at' => date(DATE_ATOM),
+        'created_by' => (string) $createdBy,
+        'source' => (string) $source,
+        'revoked_at' => null,
+        'revoked_by' => null,
+    ];
+    $records[] = $record;
+    return pr_save_records($records) ? $record : null;
+}
+
+function pr_promise_ledger_key($entry) {
+    if (!is_array($entry)) return '';
+    $invoiceId = trim((string) ($entry['invoice_id'] ?? ''));
+    $deadline = trim((string) ($entry['deadline'] ?? ''));
+    $serviceId = trim((string) ($entry['service_id'] ?? ''));
+    if ($invoiceId === '' || $deadline === '') return '';
+    return hash('sha256', $serviceId . '|' . $invoiceId . '|' . $deadline);
+}
+
+function pr_record_promise($entry) {
+    if (!is_array($entry)) return false;
+    $deadline = trim((string) ($entry['deadline'] ?? ''));
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $deadline);
+    if (!$date || $date->format('Y-m-d') !== $deadline) return false;
+
+    $entry['service_id'] = trim((string) ($entry['service_id'] ?? ''));
+    $entry['client_id'] = trim((string) ($entry['client_id'] ?? ''));
+    $entry['username'] = pr_normalize_username($entry['username'] ?? '');
+    $entry['phone'] = pr_normalize_phone($entry['phone'] ?? '');
+    $entry['invoice_id'] = trim((string) ($entry['invoice_id'] ?? ''));
+    $entry['deadline'] = $deadline;
+    $entry['ledger_key'] = pr_promise_ledger_key($entry);
+    if ($entry['ledger_key'] === '' || $entry['invoice_id'] === '') return false;
+    $entry['recorded_at'] = $entry['recorded_at'] ?? date(DATE_ATOM);
+    $entry['fulfilled_at'] = $entry['fulfilled_at'] ?? null;
+    $entry['breached_at'] = $entry['breached_at'] ?? null;
+    $entry['restriction_id'] = $entry['restriction_id'] ?? null;
+
+    $records = pr_load_promise_ledger();
+    foreach ($records as $existing) {
+        if (($existing['ledger_key'] ?? '') === $entry['ledger_key']) return true;
+    }
+    $records[] = $entry;
+    return pr_save_promise_ledger($records);
+}
+
+function pr_due_promise_entries($identifiers, $today = null) {
+    $today = $today ?: date('Y-m-d');
+    $result = [];
+    foreach (pr_load_promise_ledger() as $entry) {
+        if (!is_array($entry)) continue;
+        if (!empty($entry['fulfilled_at']) || !empty($entry['breached_at'])) continue;
+        if (!pr_records_match($entry, $identifiers)) continue;
+        $deadline = trim((string) ($entry['deadline'] ?? ''));
+        if ($deadline === '' || $deadline >= $today) continue;
+        $result[] = $entry;
+    }
+    usort($result, fn($a, $b) => strcmp((string) ($a['deadline'] ?? ''), (string) ($b['deadline'] ?? '')));
+    return $result;
+}
+
+function pr_update_promise_ledger_entry($ledgerKey, $updates) {
+    $ledgerKey = trim((string) $ledgerKey);
+    if ($ledgerKey === '' || !is_array($updates)) return false;
+    $records = pr_load_promise_ledger();
+    $found = false;
+    foreach ($records as &$record) {
+        if (($record['ledger_key'] ?? '') !== $ledgerKey) continue;
+        foreach ($updates as $key => $value) $record[$key] = $value;
+        $found = true;
+        break;
+    }
+    unset($record);
+    return $found ? pr_save_promise_ledger($records) : false;
 }
 
 function pr_public_payload($record) {

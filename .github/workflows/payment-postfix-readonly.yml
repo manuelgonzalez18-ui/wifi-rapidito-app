@@ -1,0 +1,104 @@
+name: Payment Postfix Readonly
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/payment-postfix-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Verify live payment fix without bank calls
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          PROXY="$BASE/proxy_payments.php"
+          ADAPTER="$BASE/banesco_api.php"
+          test -s "$PROXY"
+          test -s "$ADAPTER"
+
+          echo '=== Live proxy contract ==='
+          php -l "$PROXY" >/dev/null
+          sha256sum "$PROXY" | awk '{print "proxy_sha256=" $1}'
+          if grep -Fq 'BanescoAPI::checkTransaction($reference, $banescoOptions)' "$PROXY"; then
+            echo 'two_argument_call=yes'
+          else
+            echo 'two_argument_call=no'
+            exit 20
+          fi
+          for key in amount paymentDate payment_date bankId banco_origen phoneNum phone_emisor; do
+            if grep -q "'$key'" "$PROXY"; then echo "$key=yes"; else echo "$key=no"; fi
+          done
+          if grep -q "\$bankId = '0134'" "$PROXY"; then echo 'same_bank_default_0134=yes'; else echo 'same_bank_default_0134=no'; fi
+
+          echo '=== Live Banesco environment ==='
+          php -r 'require $argv[1]; echo "banesco_env=" . (defined("BANESCO_ENV") ? BANESCO_ENV : "undefined") . "\n";' "$ADAPTER"
+
+          echo '=== Payment registry aggregate only ==='
+          PRIVATE="$(dirname "$BASE")/.wifi-rapidito-private"
+          candidates=(
+            "$PRIVATE/payment-registry.json"
+            "$PRIVATE/payment_registry.json"
+            "$PRIVATE/payment-history.json"
+            "$PRIVATE/payment_history.json"
+          )
+          found=''
+          for candidate in "${candidates[@]}"; do
+            if [ -f "$candidate" ]; then found="$candidate"; break; fi
+          done
+          if [ -z "$found" ]; then
+            found="$(find "$PRIVATE" -maxdepth 1 -type f -iname '*payment*.json' 2>/dev/null | head -1 || true)"
+          fi
+          if [ -z "$found" ] || [ ! -f "$found" ]; then
+            echo 'registry_present=no'
+            exit 0
+          fi
+          echo 'registry_present=yes'
+          php -r '
+            $data=json_decode((string)file_get_contents($argv[1]), true);
+            if (!is_array($data)) { echo "registry_parse=invalid\n"; exit; }
+            $records=array_is_list($data) ? $data : ($data["records"] ?? []);
+            if (!is_array($records)) $records=[];
+            $counts=[]; $latest=[];
+            foreach ($records as $r) {
+              if (!is_array($r)) continue;
+              $s=(string)($r["status"] ?? "unknown");
+              $counts[$s]=($counts[$s]??0)+1;
+              $t=(string)($r["updated_at"] ?? $r["created_at"] ?? "");
+              if ($t!=="" && (!isset($latest[$s]) || strcmp($t,$latest[$s])>0)) $latest[$s]=$t;
+            }
+            ksort($counts);
+            echo "registry_records=" . count($records) . "\n";
+            foreach ($counts as $s=>$n) echo "status_" . preg_replace("/[^A-Za-z0-9_-]/","_",$s) . "=" . $n . "\n";
+            foreach ($latest as $s=>$t) echo "latest_" . preg_replace("/[^A-Za-z0-9_-]/","_",$s) . "=" . preg_replace("/[^0-9T:+.-]/","",$t) . "\n";
+          ' "$found"
+          REMOTE

@@ -1,0 +1,151 @@
+name: Patch Bot Invoice Source
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/patch-bot-invoice-source.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: reconstruccion-bot-10-opciones
+
+      - name: Replace invoice lookup with WispHub balance endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('vps/bot_logic.py')
+          text = path.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r'^async def load_pending_invoices\(identity\):.*?^async def get_bcv_rate\(\):',
+              re.MULTILINE | re.DOTALL,
+          )
+          replacement = '''async def load_pending_invoices(identity):
+              if not identity:
+                  return []
+
+              service_id = str(identity.get("service_id") or "").strip()
+              username = normalize_username(identity.get("username"))
+
+              # Fuente principal recomendada por WispHub para portales/chatbots:
+              # el saldo del cliente ya trae únicamente sus facturas pendientes.
+              if service_id:
+                  try:
+                      payload = await wisphub_get(f"clientes/{service_id}/saldo/")
+                      summaries = payload.get("facturas", []) if isinstance(payload, dict) else []
+                      if not isinstance(summaries, list):
+                          summaries = []
+
+                      unique = {}
+                      for summary in summaries:
+                          if not isinstance(summary, dict):
+                              continue
+
+                          iid = invoice_id(summary)
+                          invoice = dict(summary)
+
+                          # Enriquecer con el detalle real para conservar estado, folio
+                          # y demás campos que usan las respuestas del asistente.
+                          if iid:
+                              try:
+                                  detail = await wisphub_get(f"facturas/{iid}/")
+                                  if isinstance(detail, dict):
+                                      invoice.update(detail)
+                              except Exception as exc:
+                                  logger.info("Detalle de factura %s no disponible: %s", iid, exc)
+
+                          if not invoice.get("estado"):
+                              invoice["estado"] = "Pendiente de Pago"
+
+                          iid = invoice_id(invoice) or iid
+                          if iid and is_pending_invoice(invoice):
+                              unique[iid] = invoice
+
+                      return sorted(
+                          unique.values(),
+                          key=lambda item: int(invoice_id(item) or 0),
+                          reverse=True,
+                      )
+                  except Exception as exc:
+                      logger.warning(
+                          "Consulta oficial de saldo WispHub falló service_id=%s: %s",
+                          service_id,
+                          exc,
+                      )
+
+              # Fallback solamente para identidades antiguas sin id_servicio.
+              # Aunque WispHub ignore el filtro remoto, verificamos localmente
+              # que la factura pertenezca al usuario antes de aceptarla.
+              if not username:
+                  return []
+
+              try:
+                  payload = await wisphub_get("facturas/", params={"cliente": username, "limit": 50})
+              except Exception as exc:
+                  logger.info("Fallback de facturas falló usuario=%s: %s", username, exc)
+                  return []
+
+              items = payload.get("results", []) if isinstance(payload, dict) else payload
+              if not isinstance(items, list):
+                  return []
+
+              unique = {}
+              for item in items:
+                  if not isinstance(item, dict) or not is_pending_invoice(item):
+                      continue
+                  client = item.get("cliente")
+                  invoice_username = ""
+                  if isinstance(client, dict):
+                      invoice_username = normalize_username(
+                          client.get("usuario") or client.get("usuario_portal") or client.get("username")
+                      )
+                  elif client not in (None, ""):
+                      invoice_username = normalize_username(client)
+
+                  if invoice_username != username:
+                      continue
+                  iid = invoice_id(item)
+                  if iid:
+                      unique[iid] = item
+
+              return sorted(
+                  unique.values(),
+                  key=lambda item: int(invoice_id(item) or 0),
+                  reverse=True,
+              )
+
+
+          async def get_bcv_rate():'''
+          updated, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'Expected one load_pending_invoices block, replaced {count}')
+          path.write_text(updated, encoding='utf-8')
+          PY
+
+          python -m py_compile vps/bot_logic.py
+          grep -q 'clientes/{service_id}/saldo/' vps/bot_logic.py
+          git diff --check
+          git diff -- vps/bot_logic.py
+
+      - name: Commit bot change
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'manuelgonzalez18-ui'
+          git config user.email 'manuelgonzalez18@gmail.com'
+          git add vps/bot_logic.py
+          git diff --cached --quiet && { echo 'No patch needed'; exit 0; }
+          git commit -m 'usa saldo oficial WispHub para facturas del bot'
+          git push origin HEAD:reconstruccion-bot-10-opciones

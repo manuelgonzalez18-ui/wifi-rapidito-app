@@ -1,0 +1,157 @@
+name: Bot Hola Full Reset Hotfix
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/bot-hola-full-reset-hotfix.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply reset patch locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          python vps/apply_hola_reset.py
+          python -m py_compile vps/bot_entry.py vps/bot_flows.py vps/test_bot_reset.py
+          grep -q 'full_reset' vps/bot_entry.py
+          grep -q 'reiniciar completamente' vps/bot_flows.py
+
+      - name: Configure verified SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+
+      - name: Package patched bot
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            bot_logic.py bot_entry.py bot_presentation.py bot_flows.py kommo_service.py
+            validate_bot_env.py
+            test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py test_bot_reset.py
+            requirements-bot.txt Dockerfile.bot
+          )
+          for f in "${files[@]}"; do test -f "vps/$f"; done
+          tar -C vps -czf /tmp/rapidito-hola-reset.tgz "${files[@]}"
+          scp -i ~/.ssh/key -P "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            /tmp/rapidito-hola-reset.tgz "$TARGET_USER@$TARGET_HOST:/root/rapidito-hola-reset-${GITHUB_SHA}.tgz"
+
+      - name: Build test and deploy with rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" \
+            "GITHUB_SHA='$GITHUB_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          SHORT=${GITHUB_SHA:0:12}
+          STAGE=/root/rapidito-hola-reset-$SHORT
+          IMAGE=wifi-rapidito-bot:hola-reset-$SHORT
+          SMOKE=rapidito_hola_reset_smoke
+          STAMP=$(date +%Y%m%d-%H%M%S)
+          BACKUP=/root/rapidito-hola-reset-backup-$STAMP
+
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE" "$BACKUP/files"
+          chmod 700 "$BACKUP"
+          tar -xzf "/root/rapidito-hola-reset-${GITHUB_SHA}.tgz" -C "$STAGE"
+
+          cd "$STAGE"
+          docker build -f Dockerfile.bot -t "$IMAGE" .
+          docker run --rm "$IMAGE" python -m unittest \
+            test_bot_flows.py test_bot_conversation.py test_bot_integrations.py test_bot_presentation.py test_bot_reset.py
+          docker run --rm --env-file "$APP/.env" "$IMAGE" python validate_bot_env.py --network
+
+          docker rm -f "$SMOKE" >/dev/null 2>&1 || true
+          docker run -d --rm --name "$SMOKE" --env-file "$APP/.env" -p 127.0.0.1:5001:5000 "$IMAGE" >/dev/null
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:5001/webhook >/tmp/hola-reset-smoke.json 2>/dev/null; then break; fi
+            sleep 1
+          done
+          grep -q '"status":"ok"' /tmp/hola-reset-smoke.json
+          docker rm -f "$SMOKE" >/dev/null 2>&1 || true
+
+          old_health=$(curl -fsS http://127.0.0.1:5000/webhook)
+          printf '%s' "$old_health" | grep -q '"status":"ok"'
+          docker inspect -f '{{.State.Running}}' evolution_api | grep -q true
+          docker inspect -f '{{.State.Running}}' redis_bot | grep -q true
+
+          for f in bot_entry.py bot_flows.py test_bot_reset.py; do
+            if [ -f "$APP/$f" ]; then cp -a "$APP/$f" "$BACKUP/files/$f"; fi
+          done
+          docker inspect bot_backend > "$BACKUP/bot_backend-before.json"
+          docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bot_backend > "$BACKUP/bot_backend-before.env"
+          chmod 600 "$BACKUP/bot_backend-before.env"
+
+          OLD="bot_backend_pre_hola_reset_$STAMP"
+          rollback() {
+            docker rm -f bot_backend >/dev/null 2>&1 || true
+            if docker inspect "$OLD" >/dev/null 2>&1; then
+              docker rename "$OLD" bot_backend >/dev/null 2>&1 || true
+              docker start bot_backend >/dev/null 2>&1 || true
+            fi
+            for f in bot_entry.py bot_flows.py test_bot_reset.py; do
+              if [ -f "$BACKUP/files/$f" ]; then
+                cp -a "$BACKUP/files/$f" "$APP/$f"
+              elif [ "$f" = test_bot_reset.py ]; then
+                rm -f "$APP/$f"
+              fi
+            done
+          }
+          trap 'rc=$?; if [ $rc -ne 0 ]; then rollback; fi; exit $rc' EXIT
+
+          cp -a "$STAGE/bot_entry.py" "$APP/bot_entry.py"
+          cp -a "$STAGE/bot_flows.py" "$APP/bot_flows.py"
+          cp -a "$STAGE/test_bot_reset.py" "$APP/test_bot_reset.py"
+
+          docker stop -t 15 bot_backend >/dev/null
+          docker rename bot_backend "$OLD"
+          docker run -d \
+            --name bot_backend \
+            --restart always \
+            --network public_html_default \
+            --env-file "$APP/.env" \
+            -p 5000:5000 \
+            "$IMAGE" >/dev/null
+
+          healthy=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/webhook >/tmp/new-health.json 2>/dev/null && \
+               grep -q '"status":"ok"' /tmp/new-health.json && \
+               grep -q '"provider":"meta"' /tmp/new-health.json; then
+              healthy=1
+              break
+            fi
+            sleep 1
+          done
+          test "$healthy" = 1
+          docker logs --tail 50 bot_backend 2>&1 | grep -qiE 'traceback|syntaxerror' && exit 44 || true
+
+          trap - EXIT
+          echo "HOLA_RESET_DEPLOYED=1"
+          echo "IMAGE=$IMAGE"
+          echo "BACKUP=$BACKUP"
+          REMOTE

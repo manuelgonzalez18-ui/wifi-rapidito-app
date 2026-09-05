@@ -1,0 +1,40 @@
+diff --git a/vps/bot_entry.py b/vps/bot_entry.py
+--- a/vps/bot_entry.py
++++ b/vps/bot_entry.py
+@@
+-    # Antes de identificar una cuenta, el bot histórico pide el usuario de
+-    # WiFi Rapidito. Una vez identificado, MENU vuelve directamente al menú.
+-    if message in {"menu", "menú", "volver", "inicio"} or message.startswith("hola") or message.startswith("buenas"):
++    # HOLA es un reinicio absoluto de la conversación: borra identidad y
++    # cualquier flujo transitorio para volver al inicio, incluso si el cliente
++    # ya estaba identificado. INICIO/REINICIAR tienen el mismo comportamiento.
++    full_reset = (
++        re.fullmatch(r"hola[!¡?.\s]*", message) is not None
++        or message in {"inicio", "reiniciar", "reset"}
++    )
++    if full_reset:
++        state["mode"] = "START"
++        state["identity"] = None
++        state["data"] = {}
++        await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
++        return
++
++    # MENU/VOLVER conserva la comodidad de regresar al panel cuando ya existe
++    # una cuenta identificada; si no, vuelve a la bienvenida.
++    if message in {"menu", "menú", "volver"} or message.startswith("buenas"):
+         if state.get("identity"):
+             await bot.show_client_menu(numero_cliente, state, state["identity"])
+         else:
+             state["mode"] = "START"
+             state["identity"] = None
+             state["data"] = {}
+             await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
+         return
+diff --git a/vps/bot_flows.py b/vps/bot_flows.py
+--- a/vps/bot_flows.py
++++ b/vps/bot_flows.py
+@@
+-Escribe el número de la opción 👇"""
++Escribe el número de la opción 👇
++
++_Para reiniciar completamente, escribe *HOLA*._"""
