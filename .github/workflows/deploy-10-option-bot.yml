@@ -2,12 +2,13 @@ name: Deploy Rapidito 10-Option Bot
 
 on:
   push:
-    branches:
-      - reconstruccion-bot-10-opciones
+    branches: [reconstruccion-bot-10-opciones]
     paths:
-      - 'vps/bot_logic.py'
-      - 'vps/bot_flows.py'
+      - 'vps/*.py'
+      - 'vps/requirements-bot.txt'
+      - 'vps/Dockerfile.bot'
       - '.github/workflows/deploy-10-option-bot.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,94 +17,118 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate bot
-        run: |
-          python -m py_compile vps/bot_logic.py
-          python -m py_compile vps/bot_flows.py
-
-      - name: Configure VPS SSH
-        env:
-          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
-          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
-          BOT_VPS_SSH_KEY: ${{ secrets.BOT_VPS_SSH_KEY }}
-          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+      - name: Validate bot source
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$BOT_VPS_HOST"
-          test -n "$BOT_VPS_USER"
-          test -n "$BOT_VPS_SSH_KEY"
-          BOT_VPS_PORT="${BOT_VPS_PORT:-22}"
+          python -m py_compile vps/*.py
+          grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' vps/bot_logic.py
+
+      - name: Configure verified VPS SSH
+        env:
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BOT_VPS_SSH_KEY_B64"
           mkdir -p ~/.ssh
-          printf '%s\n' "$BOT_VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/vps_deploy
-          chmod 600 ~/.ssh/vps_deploy
-          ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
-          ssh-keyscan -p "$BOT_VPS_PORT" -H "$BOT_VPS_HOST" >> ~/.ssh/known_hosts
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'echo VPS_CONNECTION_OK'
 
-      - name: Deploy 10-option bot and restart
-        env:
-          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
-          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
-          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
+      - name: Package bot
         shell: bash
         run: |
           set -euo pipefail
-          BOT_VPS_PORT="${BOT_VPS_PORT:-22}"
-          scp -i ~/.ssh/vps_deploy -P "$BOT_VPS_PORT" vps/bot_logic.py "$BOT_VPS_USER@$BOT_VPS_HOST:/tmp/bot_logic.py.$GITHUB_SHA"
-          scp -i ~/.ssh/vps_deploy -P "$BOT_VPS_PORT" vps/bot_flows.py "$BOT_VPS_USER@$BOT_VPS_HOST:/tmp/bot_flows.py.$GITHUB_SHA"
+          tar -C vps -czf /tmp/rapidito-bot-$GITHUB_SHA.tgz --exclude='__pycache__' --exclude='*.pyc' *.py requirements-bot.txt Dockerfile.bot
+          scp -i ~/.ssh/key -P "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            /tmp/rapidito-bot-$GITHUB_SHA.tgz \
+            "$TARGET_USER@$TARGET_HOST:/root/rapidito-bot-$GITHUB_SHA.tgz"
 
-          ssh -i ~/.ssh/vps_deploy -p "$BOT_VPS_PORT" "$BOT_VPS_USER@$BOT_VPS_HOST" \
-            "BOT_TMP='/tmp/bot_logic.py.$GITHUB_SHA' FLOWS_TMP='/tmp/bot_flows.py.$GITHUB_SHA' bash -s" <<'REMOTE'
+      - name: Build and deploy with rollback
+        shell: bash
+        run: |
           set -euo pipefail
-          compose_file=""
-          for base in "$HOME" /opt /srv; do
-            [ -d "$base" ] || continue
-            while IFS= read -r candidate; do
-              if grep -q 'container_name:[[:space:]]*bot_backend' "$candidate" 2>/dev/null; then
-                compose_file="$candidate"
-                break 2
-              fi
-            done < <(find "$base" -maxdepth 6 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null)
-          done
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" \
+            "GITHUB_SHA='$GITHUB_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          APP=/home/bot.local/public_html
+          SHORT=${GITHUB_SHA:0:12}
+          STAGE=/root/rapidito-bot-$SHORT
+          IMAGE=wifi-rapidito-bot:promise-message-$SHORT
+          STAMP=$(date +%Y%m%d-%H%M%S)
+          OLD="bot_backend_pre_promise_message_$STAMP"
 
-          if [ -z "$compose_file" ]; then
-            echo "Rapidito compose project not found."
-            exit 1
-          fi
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          tar -xzf "/root/rapidito-bot-$GITHUB_SHA.tgz" -C "$STAGE"
 
-          app_dir="$(dirname "$compose_file")"
-          cp "$BOT_TMP" "$app_dir/bot_logic.py.next"
-          cp "$FLOWS_TMP" "$app_dir/bot_flows.py.next"
-          python3 -m py_compile "$app_dir/bot_logic.py.next"
-          python3 -m py_compile "$app_dir/bot_flows.py.next"
-          mv "$app_dir/bot_logic.py.next" "$app_dir/bot_logic.py"
-          mv "$app_dir/bot_flows.py.next" "$app_dir/bot_flows.py"
-          rm -f "$BOT_TMP" "$FLOWS_TMP"
+          cd "$STAGE"
+          grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' bot_logic.py
+          docker build -f Dockerfile.bot -t "$IMAGE" .
 
-          cd "$app_dir"
-          if docker compose version >/dev/null 2>&1; then
-            docker compose up -d --build bot_backend
-          else
-            docker-compose up -d --build bot_backend
-          fi
+          old_health=$(curl -fsS http://127.0.0.1:5000/webhook)
+          printf '%s' "$old_health" | grep -q '"status":"ok"'
+          docker inspect -f '{{.State.Running}}' evolution_api | grep -q true
+          docker inspect -f '{{.State.Running}}' redis_bot | grep -q true
 
-          for attempt in $(seq 1 20); do
-            if docker inspect -f '{{.State.Running}}' bot_backend 2>/dev/null | grep -qx true \
-              && docker exec bot_backend grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' /app/bot_logic.py 2>/dev/null \
-              && docker exec bot_backend grep -q '10' /app/bot_logic.py 2>/dev/null; then
-              echo "Rapidito 10-option bot deployed and verified."
-              exit 0
+          docker stop -t 15 bot_backend >/dev/null
+          docker rename bot_backend "$OLD"
+
+          rollback() {
+            echo 'ROLLBACK_BEGIN=1'
+            docker rm -f bot_backend >/dev/null 2>&1 || true
+            if docker inspect "$OLD" >/dev/null 2>&1; then
+              docker rename "$OLD" bot_backend >/dev/null 2>&1 || true
+              docker start bot_backend >/dev/null 2>&1 || true
             fi
-            sleep 3
+          }
+          trap 'rc=$?; if [ $rc -ne 0 ]; then rollback; fi; exit $rc' EXIT
+
+          docker run -d \
+            --name bot_backend \
+            --restart always \
+            --network public_html_default \
+            --env-file "$APP/.env" \
+            -p 5000:5000 \
+            "$IMAGE" >/dev/null
+
+          healthy=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/webhook >/tmp/new-health.json 2>/dev/null && \
+               grep -q '"status":"ok"' /tmp/new-health.json && \
+               grep -q '4.0-bot-10-opciones' /tmp/new-health.json && \
+               docker exec bot_backend grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' /app/bot_logic.py; then
+              healthy=1
+              break
+            fi
+            sleep 1
           done
 
-          docker logs --tail 100 bot_backend 2>&1 || true
-          exit 1
+          test "$healthy" = 1
+          docker inspect -f '{{.State.Running}}' bot_backend | grep -q true
+          docker inspect -f '{{.State.Running}}' evolution_api | grep -q true
+          docker inspect -f '{{.State.Running}}' redis_bot | grep -q true
+
+          trap - EXIT
+          echo 'RAPIDITO_PROMISE_MESSAGE_DEPLOYED=1'
+          echo "IMAGE=$IMAGE"
+          echo "ROLLBACK_CONTAINER=$OLD"
           REMOTE
 
       - name: Publish deployment status
@@ -118,5 +143,5 @@ jobs:
               sha: context.sha,
               state: 'success',
               context: 'Rapidito 10-Option Bot Deploy',
-              description: '10-option WhatsApp bot deployed and verified',
+              description: 'Promise restriction message deployed and verified on VPS',
             });
