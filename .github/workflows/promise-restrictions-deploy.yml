@@ -161,7 +161,7 @@ jobs:
 
           for attempt in $(seq 1 20); do
             if docker inspect -f '{{.State.Running}}' bot_backend 2>/dev/null | grep -qx true \
-              && docker exec bot_backend grep -q 'Beneficio suspendido por incumplimiento' /app/bot_logic.py 2>/dev/null; then
+              && docker exec bot_backend grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' /app/bot_logic.py 2>/dev/null; then
               echo "Rapidito bot deployed, restarted and verified."
               exit 0
             fi
