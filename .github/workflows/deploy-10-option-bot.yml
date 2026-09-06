@@ -1,0 +1,122 @@
+name: Deploy Rapidito 10-Option Bot
+
+on:
+  push:
+    branches:
+      - reconstruccion-bot-10-opciones
+    paths:
+      - 'vps/bot_logic.py'
+      - 'vps/bot_flows.py'
+      - '.github/workflows/deploy-10-option-bot.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate bot
+        run: |
+          python -m py_compile vps/bot_logic.py
+          python -m py_compile vps/bot_flows.py
+
+      - name: Configure VPS SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_KEY"
+          VPS_PORT="${VPS_PORT:-22}"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/vps_deploy
+          chmod 600 ~/.ssh/vps_deploy
+          ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
+          ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy 10-option bot and restart
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VPS_PORT="${VPS_PORT:-22}"
+          scp -i ~/.ssh/vps_deploy -P "$VPS_PORT" vps/bot_logic.py "$VPS_USER@$VPS_HOST:/tmp/bot_logic.py.$GITHUB_SHA"
+          scp -i ~/.ssh/vps_deploy -P "$VPS_PORT" vps/bot_flows.py "$VPS_USER@$VPS_HOST:/tmp/bot_flows.py.$GITHUB_SHA"
+
+          ssh -i ~/.ssh/vps_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "BOT_TMP='/tmp/bot_logic.py.$GITHUB_SHA' FLOWS_TMP='/tmp/bot_flows.py.$GITHUB_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          compose_file=""
+          for base in "$HOME" /opt /srv; do
+            [ -d "$base" ] || continue
+            while IFS= read -r candidate; do
+              if grep -q 'container_name:[[:space:]]*bot_backend' "$candidate" 2>/dev/null; then
+                compose_file="$candidate"
+                break 2
+              fi
+            done < <(find "$base" -maxdepth 6 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null)
+          done
+
+          if [ -z "$compose_file" ]; then
+            echo "Rapidito compose project not found."
+            exit 1
+          fi
+
+          app_dir="$(dirname "$compose_file")"
+          cp "$BOT_TMP" "$app_dir/bot_logic.py.next"
+          cp "$FLOWS_TMP" "$app_dir/bot_flows.py.next"
+          python3 -m py_compile "$app_dir/bot_logic.py.next"
+          python3 -m py_compile "$app_dir/bot_flows.py.next"
+          mv "$app_dir/bot_logic.py.next" "$app_dir/bot_logic.py"
+          mv "$app_dir/bot_flows.py.next" "$app_dir/bot_flows.py"
+          rm -f "$BOT_TMP" "$FLOWS_TMP"
+
+          cd "$app_dir"
+          if docker compose version >/dev/null 2>&1; then
+            docker compose up -d --build bot_backend
+          else
+            docker-compose up -d --build bot_backend
+          fi
+
+          for attempt in $(seq 1 20); do
+            if docker inspect -f '{{.State.Running}}' bot_backend 2>/dev/null | grep -qx true \
+              && docker exec bot_backend grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' /app/bot_logic.py 2>/dev/null \
+              && docker exec bot_backend grep -q '10' /app/bot_logic.py 2>/dev/null; then
+              echo "Rapidito 10-option bot deployed and verified."
+              exit 0
+            fi
+            sleep 3
+          done
+
+          docker logs --tail 100 bot_backend 2>&1 || true
+          exit 1
+          REMOTE
+
+      - name: Publish deployment status
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              context: 'Rapidito 10-Option Bot Deploy',
+              description: '10-option WhatsApp bot deployed and verified',
+            });
