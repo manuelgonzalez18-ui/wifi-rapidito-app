@@ -14,6 +14,10 @@ permissions:
   contents: read
   statuses: write
 
+concurrency:
+  group: rapidito-production-bot
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -33,7 +37,10 @@ jobs:
         run: |
           set -euo pipefail
           python -m py_compile vps/*.py
+          grep -q 'Promesa de pago temporalmente no disponible' vps/bot_logic.py
+          grep -q 'Beneficio suspendido por incumplimiento' vps/bot_logic.py
           grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' vps/bot_logic.py
+          grep -q 'message.startswith("hola")' vps/bot_entry.py
 
       - name: Configure verified VPS SSH
         env:
@@ -67,6 +74,8 @@ jobs:
           ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" \
             "GITHUB_SHA='$GITHUB_SHA' bash -s" <<'REMOTE'
           set -euo pipefail
+          exec 9>/var/lock/rapidito-production-bot.lock
+          flock -w 120 9
           APP=/home/bot.local/public_html
           SHORT=${GITHUB_SHA:0:12}
           STAGE=/root/rapidito-bot-$SHORT
@@ -79,7 +88,10 @@ jobs:
           tar -xzf "/root/rapidito-bot-$GITHUB_SHA.tgz" -C "$STAGE"
 
           cd "$STAGE"
+          grep -q 'Promesa de pago temporalmente no disponible' bot_logic.py
+          grep -q 'Beneficio suspendido por incumplimiento' bot_logic.py
           grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' bot_logic.py
+          grep -q 'message.startswith("hola")' bot_entry.py
           docker build -f Dockerfile.bot -t "$IMAGE" .
 
           old_health=$(curl -fsS http://127.0.0.1:5000/webhook)
@@ -113,7 +125,12 @@ jobs:
             if curl -fsS http://127.0.0.1:5000/webhook >/tmp/new-health.json 2>/dev/null && \
                grep -q '"status":"ok"' /tmp/new-health.json && \
                grep -q '4.0-bot-10-opciones' /tmp/new-health.json && \
-               docker exec bot_backend grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' /app/bot_logic.py; then
+               docker exec bot_backend grep -q 'Promesa de pago temporalmente no disponible' /app/bot_logic.py && \
+               docker exec bot_backend grep -q 'Beneficio suspendido por incumplimiento' /app/bot_logic.py && \
+               docker exec bot_backend grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' /app/bot_logic.py && \
+               docker exec bot_backend grep -q 'La suspensión vence automáticamente en esa fecha' /app/bot_logic.py && \
+               docker exec bot_backend grep -q 'pagos, facturas y soporte técnico' /app/bot_logic.py && \
+               docker exec bot_backend grep -q 'message.startswith("hola")' /app/bot_entry.py; then
               healthy=1
               break
             fi
