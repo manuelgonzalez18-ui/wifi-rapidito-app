@@ -916,7 +916,13 @@ async def process_user_message(numero_cliente, mensaje):
     if not message:
         return
     state = state_for(state_key)
-    if message in {"menu", "menú", "volver", "inicio"} or message.startswith("hola") or message.startswith("buenas"):
+    if message.startswith("hola"):
+        state["mode"] = "START"
+        state["identity"] = None
+        state["data"] = {}
+        await enviar_whatsapp(numero_cliente, MENU_BIENVENIDA)
+        return
+    if message in {"menu", "menú", "volver", "inicio"} or message.startswith("buenas"):
         identity = state.get("identity") or await find_client_by_whatsapp_phone(numero_cliente)
         if identity:
             await show_client_menu(numero_cliente, state, identity)
