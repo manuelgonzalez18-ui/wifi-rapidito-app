@@ -11,6 +11,8 @@ from kommo_service import create_lead_with_contact
 
 app = FastAPI()
 
+# Deployment marker: improved promise restriction notice
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("wifi-rapidito-bot")
 
