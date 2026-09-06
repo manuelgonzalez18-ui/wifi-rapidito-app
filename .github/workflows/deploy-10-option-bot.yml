@@ -41,6 +41,8 @@ jobs:
           grep -q 'Beneficio suspendido por incumplimiento' vps/bot_logic.py
           grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' vps/bot_logic.py
           grep -q 'message.startswith("hola")' vps/bot_entry.py
+          grep -q 'Beneficio suspendido por incumplimiento' vps/bot_entry.py
+          grep -q 'La suspensión vence automáticamente en esa fecha' vps/bot_entry.py
 
       - name: Configure verified VPS SSH
         env:
@@ -92,6 +94,8 @@ jobs:
           grep -q 'Beneficio suspendido por incumplimiento' bot_logic.py
           grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' bot_logic.py
           grep -q 'message.startswith("hola")' bot_entry.py
+          grep -q 'Beneficio suspendido por incumplimiento' bot_entry.py
+          grep -q 'La suspensión vence automáticamente en esa fecha' bot_entry.py
           docker build -f Dockerfile.bot -t "$IMAGE" .
 
           old_health=$(curl -fsS http://127.0.0.1:5000/webhook)
@@ -130,7 +134,9 @@ jobs:
                docker exec bot_backend grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' /app/bot_logic.py && \
                docker exec bot_backend grep -q 'La suspensión vence automáticamente en esa fecha' /app/bot_logic.py && \
                docker exec bot_backend grep -q 'pagos, facturas y soporte técnico' /app/bot_logic.py && \
-               docker exec bot_backend grep -q 'message.startswith("hola")' /app/bot_entry.py; then
+               docker exec bot_backend grep -q 'message.startswith("hola")' /app/bot_entry.py && \
+               docker exec bot_backend grep -q 'Beneficio suspendido por incumplimiento' /app/bot_entry.py && \
+               docker exec bot_backend grep -q 'La suspensión vence automáticamente en esa fecha' /app/bot_entry.py; then
               healthy=1
               break
             fi
