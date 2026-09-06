@@ -277,13 +277,13 @@ async def promise_response_for_phone(phone):
 
     blocked_until = restriction.get("blocked_until", "la fecha indicada")
     return f"""
-🚫 *Promesa de pago no disponible temporalmente*
+🚫 *Promesa de pago temporalmente no disponible*
 
-Debido al incumplimiento de una promesa anterior, este beneficio se encuentra suspendido por *3 meses*.
+🛡️ *Beneficio suspendido por incumplimiento*
 
-📅 Podrás solicitar una nueva promesa a partir del *{blocked_until}*.
+Registramos el incumplimiento de una promesa de pago anterior. De acuerdo con la política de Wifi Rapidito, podrás solicitar nuevamente este beneficio a partir del *{blocked_until}*.
 
-Esta medida solo afecta nuevas promesas. Puedes continuar usando normalmente las opciones de *pago, facturas y soporte técnico*.
+📅 La suspensión vence automáticamente; no afecta *pagos, facturas ni soporte técnico*.
 """
 
 
