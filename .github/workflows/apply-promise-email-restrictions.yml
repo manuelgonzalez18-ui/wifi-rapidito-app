@@ -1,0 +1,210 @@
+name: Apply Promise Breach Email Restrictions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-promise-email-restrictions.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger
+          chmod 600 ~/.ssh/hostinger
+          ssh-keygen -y -f ~/.ssh/hostinger >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Apply restrictions from new WispHub breach notifications
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/apply_email_restrictions.php <<'PHP'
+          <?php
+          date_default_timezone_set('America/Caracas');
+          require 'promise_restrictions_lib.php';
+          require 'config_wisphub.php';
+
+          $usernames = [
+              'luiscisneros',
+              'nelsonblanco',
+              'yeiralissanz',
+              'roraimamendoza',
+              'xiomarapalacios',
+              'noralyscurvelo',
+              'emilliurbina',
+              'jackelinepinto',
+              'javierlaya',
+              'diaynesblanco',
+              'yeseniapalacios',
+              'marianamorales',
+              'priscaandreinaollarves',
+              'maribelollarves',
+              'yordelishidalgo',
+              'dulcamaraavilan',
+          ];
+
+          function wh_get_json(string $url): ?array {
+              $ch = curl_init($url);
+              curl_setopt_array($ch, [
+                  CURLOPT_RETURNTRANSFER => true,
+                  CURLOPT_HTTPHEADER => [
+                      'Authorization: Api-Key ' . WISPHUB_TOKEN,
+                      'Accept: application/json',
+                  ],
+                  CURLOPT_CONNECTTIMEOUT => 5,
+                  CURLOPT_TIMEOUT => 20,
+                  CURLOPT_SSL_VERIFYPEER => true,
+                  CURLOPT_SSL_VERIFYHOST => 2,
+                  CURLOPT_FOLLOWLOCATION => true,
+                  CURLOPT_MAXREDIRS => 3,
+                  CURLOPT_ENCODING => '',
+              ]);
+              $body = curl_exec($ch);
+              $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+              curl_close($ch);
+              if ($body === false || $code < 200 || $code >= 300) return null;
+              $decoded = json_decode($body, true);
+              return is_array($decoded) ? $decoded : null;
+          }
+
+          function fetch_all_clients(): array {
+              $base = rtrim(WISPHUB_API_URL, '/') . '/clientes/';
+              $clients = [];
+              $offset = 0;
+              $limit = 300;
+
+              for ($page = 0; $page < 40; $page++) {
+                  $payload = wh_get_json($base . '?limit=' . $limit . '&offset=' . $offset);
+                  if (!is_array($payload)) break;
+                  $batch = is_array($payload['results'] ?? null)
+                      ? $payload['results']
+                      : (array_is_list($payload) ? $payload : []);
+                  foreach ($batch as $client) {
+                      if (is_array($client)) $clients[] = $client;
+                  }
+                  $received = count($batch);
+                  if ($received === 0) break;
+                  $offset += $received;
+                  $total = isset($payload['count']) && is_numeric($payload['count']) ? (int)$payload['count'] : null;
+                  if ($total !== null && $offset >= $total) break;
+                  if ($total === null && $received < $limit && empty($payload['next'])) break;
+              }
+
+              return $clients;
+          }
+
+          $clients = fetch_all_clients();
+          if (!$clients) {
+              fwrite(STDERR, "Could not load WispHub clients.\n");
+              exit(2);
+          }
+
+          $byUsername = [];
+          foreach ($clients as $client) {
+              $username = pr_normalize_username(pr_first_value($client, ['usuario','usuario_portal','username'], ''));
+              if ($username !== '') $byUsername[$username] = $client;
+          }
+
+          $records = pr_load_records();
+          $incident = new DateTimeImmutable('2026-09-05', new DateTimeZone('America/Caracas'));
+          $startsAt = $incident->setTime(0,0,0);
+          $endsAt = pr_add_months_clamped($incident, 3)->setTime(0,0,0);
+
+          $created = 0;
+          $already = 0;
+          $missing = [];
+
+          foreach ($usernames as $username) {
+              $normalized = pr_normalize_username($username);
+              $client = $byUsername[$normalized] ?? null;
+              if (!is_array($client)) {
+                  $missing[] = $normalized;
+                  continue;
+              }
+
+              $ids = pr_identifiers_from_client($client);
+              $duplicate = false;
+              foreach ($records as $record) {
+                  if (pr_record_is_active($record) && pr_records_match($record, $ids)) {
+                      $duplicate = true;
+                      break;
+                  }
+              }
+              if ($duplicate) {
+                  $already++;
+                  continue;
+              }
+
+              $records[] = [
+                  'id' => bin2hex(random_bytes(8)),
+                  'client_name' => trim((string)pr_first_value($client, ['nombre','name','cliente'], 'Cliente')),
+                  'service_id' => $ids['service_id'] ?? '',
+                  'client_id' => $ids['client_id'] ?? '',
+                  'username' => $ids['username'] ?? $normalized,
+                  'phone' => $ids['phone'] ?? '',
+                  'cedula' => trim((string)pr_first_value($client, ['cedula','documento','rif'], '')),
+                  'email' => trim((string)pr_first_value($client, ['correo','email'], '')),
+                  'reason' => 'Incumplimiento de promesa de pago',
+                  'note' => 'Restricción aplicada desde notificación WispHub de corte por incumplimiento recibida el 2026-09-05.',
+                  'incident_date' => $incident->format('Y-m-d'),
+                  'starts_at' => $startsAt->format(DATE_ATOM),
+                  'ends_at' => $endsAt->format(DATE_ATOM),
+                  'created_at' => date(DATE_ATOM),
+                  'created_by' => 'gmail-wisphub-breach-review',
+                  'revoked_at' => null,
+                  'revoked_by' => null,
+              ];
+              $created++;
+          }
+
+          if ($created > 0 && !pr_save_records($records)) {
+              fwrite(STDERR, "Failed saving restrictions.\n");
+              exit(2);
+          }
+
+          echo "SUMMARY created=$created already_active=$already missing=" . count($missing) . "\n";
+          if ($missing) {
+              echo "MISSING " . implode(',', $missing) . "\n";
+              exit(3);
+          }
+          PHP
+
+          scp -i ~/.ssh/hostinger -P 65002 /tmp/apply_email_restrictions.php "$HOSTINGER_USER@$HOSTINGER_HOST:/tmp/apply_email_restrictions.php"
+          ssh -i ~/.ssh/hostinger -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'cd "$HOME/domains/wifirapidito.com/public_html" && php /tmp/apply_email_restrictions.php'
+
+      - name: Publish status
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              context: 'Promise Email Restrictions',
+              description: 'New WispHub breach email restrictions applied',
+            });
