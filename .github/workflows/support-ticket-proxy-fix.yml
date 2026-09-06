@@ -1,0 +1,160 @@
+name: Support Ticket Proxy Fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/support-ticket-proxy-fix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  patch-production-proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Patch ticket technician retry logic
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'python3 -' <<'PY'
+          from pathlib import Path
+          from datetime import datetime
+
+          path = Path.home() / "domains/wifirapidito.com/public_html/proxy.php"
+          text = path.read_text()
+
+          old_rotation = """    // Rotación de Técnicos Reales
+              $technicians = ['2223475', '2379997', '5853064']; // Ramon, Alberto, Josue
+              if (!isset($data['tecnico']) || $data['tecnico'] == '5853049') {
+                  $data['tecnico'] = $technicians[array_rand($technicians)];
+              }
+          """.replace("              ", "    ")
+
+          new_rotation = """    // Técnicos candidatos. Se prueban en orden si WispHub rechaza uno.
+              $technicians = ['2223475', '2379997', '5853064'];
+              if (!isset($data['tecnico']) || $data['tecnico'] == '5853049') {
+                  $data['tecnico'] = $technicians[0];
+              }
+          """.replace("              ", "    ")
+
+          old_exec = """$response = curl_exec($ch);
+          $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+          curl_close($ch);
+          """
+
+          new_exec = """$response = curl_exec($ch);
+          $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+          // Si WispHub rechaza el técnico, reintentamos automáticamente con
+          // los demás técnicos configurados y, por último, sin asignación.
+          if ($method === 'POST' && isset($technicians)) {
+              $isTechnicianError = function ($body) {
+                  $decoded = json_decode((string)$body, true);
+                  return is_array($decoded) && isset($decoded['tecnico']);
+              };
+
+              if ($isTechnicianError($response)) {
+                  $currentTechnician = (string)($data['tecnico'] ?? '');
+                  foreach ($technicians as $candidate) {
+                      if ((string)$candidate === $currentTechnician) continue;
+
+                      $data['tecnico'] = $candidate;
+                      writeLog("RETRY TICKET WITH TECNICO: " . $candidate);
+
+                      if (!empty($_FILES)) {
+                          curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+                      } else {
+                          curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+                      }
+
+                      $response = curl_exec($ch);
+                      $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                      if ($http_code === 200 || $http_code === 201 || !$isTechnicianError($response)) {
+                          break;
+                      }
+                  }
+
+                  if ($isTechnicianError($response)) {
+                      unset($data['tecnico']);
+                      writeLog("RETRY TICKET WITHOUT TECNICO");
+
+                      if (!empty($_FILES)) {
+                          curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+                      } else {
+                          curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+                      }
+
+                      $response = curl_exec($ch);
+                      $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                  }
+              }
+          }
+
+          curl_close($ch);
+          """
+
+          if "RETRY TICKET WITH TECNICO" in text:
+              print("Ticket retry patch already present.")
+          else:
+              if old_rotation not in text:
+                  raise SystemExit("Expected technician rotation block was not found; refusing unsafe patch.")
+              if old_exec not in text:
+                  raise SystemExit("Expected curl execution block was not found; refusing unsafe patch.")
+
+              backup = path.with_name(f"proxy.php.{datetime.now():%Y%m%d-%H%M%S}.bak")
+              backup.write_text(text)
+              text = text.replace(old_rotation, new_rotation, 1)
+              text = text.replace(old_exec, new_exec, 1)
+              path.write_text(text)
+              print(f"Patched {path}; backup={backup.name}")
+          PY
+
+      - name: Validate production proxy
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REMOTE="$HOME/domains/wifirapidito.com/public_html/proxy.php"
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            "php -l '$REMOTE' >/dev/null && grep -q 'RETRY TICKET WITH TECNICO' '$REMOTE' && grep -q 'RETRY TICKET WITHOUT TECNICO' '$REMOTE' && echo 'Support ticket retry patch verified.'"
+
+      - name: Publish deployment status
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              context: 'Support Ticket Proxy Fix',
+              description: 'WispHub technician retry logic deployed and verified',
+            });
