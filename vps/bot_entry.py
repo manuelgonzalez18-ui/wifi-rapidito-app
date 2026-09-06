@@ -342,9 +342,17 @@ async def process_user_message(numero_cliente, mensaje):
 
     state = bot.state_for(state_key)
 
-    # Antes de identificar una cuenta, el bot histórico pide el usuario de
-    # WiFi Rapidito. Una vez identificado, MENU vuelve directamente al menú.
-    if message in {"menu", "menú", "volver", "inicio"} or message.startswith("hola") or message.startswith("buenas"):
+    # "Hola" siempre reinicia completamente la conversación y borra la
+    # identidad/flujo anterior. MENU/VOLVER mantienen el acceso rápido al menú
+    # del cliente cuando ya existe una identidad válida.
+    if message.startswith("hola"):
+        state["mode"] = "START"
+        state["identity"] = None
+        state["data"] = {}
+        await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
+        return
+
+    if message in {"menu", "menú", "volver", "inicio"} or message.startswith("buenas"):
         if state.get("identity"):
             await bot.show_client_menu(numero_cliente, state, state["identity"])
         else:
