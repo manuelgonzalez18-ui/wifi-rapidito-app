@@ -281,9 +281,15 @@ async def promise_response_for_phone(phone):
 
 🛡️ *Beneficio suspendido por incumplimiento*
 
-Registramos el incumplimiento de una promesa de pago anterior. De acuerdo con la política de Wifi Rapidito, podrás solicitar nuevamente este beneficio a partir del *{blocked_until}*.
+Registramos el incumplimiento de una promesa de pago anterior.
 
-📅 La suspensión vence automáticamente; no afecta *pagos, facturas ni soporte técnico*.
+De acuerdo con la política de *Wifi Rapidito*, este beneficio se encuentra suspendido temporalmente.
+
+📅 *Podrás solicitar nuevamente una Promesa de Pago a partir del {blocked_until}.*
+
+La suspensión vence automáticamente en esa fecha y aplica únicamente a nuevas promesas de pago.
+
+✅ Puedes continuar usando con normalidad las opciones de *pagos, facturas y soporte técnico*.
 """
 
 
