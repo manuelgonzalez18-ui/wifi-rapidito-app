@@ -210,10 +210,16 @@ async def start_promise(numero_cliente, state):
     restriction = await bot.get_promise_restriction(identity)
     if restriction:
         blocked_until = restriction.get("blocked_until", "la fecha indicada")
+        blocked_until_display = format_date_es(blocked_until)
         await bot.enviar_whatsapp(
             numero_cliente,
-            "🚫 *Promesa de pago no disponible temporalmente*\n\n"
-            f"Podrás solicitar una nueva promesa a partir del *{format_date_es(blocked_until)}*.",
+            "🚫 *Promesa de pago temporalmente no disponible*\n\n"
+            "🛡️ *Beneficio suspendido por incumplimiento*\n\n"
+            "Registramos el incumplimiento de una promesa de pago anterior.\n\n"
+            "De acuerdo con la política de *Wifi Rapidito*, este beneficio se encuentra suspendido temporalmente.\n\n"
+            f"📅 *Podrás solicitar nuevamente una Promesa de Pago a partir del {blocked_until_display}.*\n\n"
+            "La suspensión vence automáticamente en esa fecha y aplica únicamente a nuevas promesas de pago.\n\n"
+            "✅ Puedes continuar usando con normalidad las opciones de *pagos, facturas y soporte técnico*.",
         )
         return
 
