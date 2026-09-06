@@ -10,11 +10,12 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   reconcile:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Configure Hostinger SSH
         env:
@@ -39,82 +40,192 @@ jobs:
           set -euo pipefail
           cat > /tmp/promise_hourly_sweep.php <<'PHP'
           <?php
-          date_default_timezone_set("America/Caracas");
-          require "promise_restrictions_lib.php";
-          require "config_wisphub.php";
-          
+          date_default_timezone_set('America/Caracas');
+          require 'promise_restrictions_lib.php';
+          require 'config_wisphub.php';
+
           function wh_get_json(string $url): ?array {
-            $ch=curl_init($url);
-            curl_setopt_array($ch,[
-              CURLOPT_RETURNTRANSFER=>true,
-              CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"],
-              CURLOPT_CONNECTTIMEOUT=>5,CURLOPT_TIMEOUT=>20,
-              CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2
-            ]);
-            $body=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
-            if($body===false||$code<200||$code>=300)return null;
-            $d=json_decode($body,true);
-            return is_array($d)?$d:null;
+              $ch = curl_init($url);
+              curl_setopt_array($ch, [
+                  CURLOPT_RETURNTRANSFER => true,
+                  CURLOPT_HTTPHEADER => [
+                      'Authorization: Api-Key ' . WISPHUB_TOKEN,
+                      'Accept: application/json',
+                  ],
+                  CURLOPT_CONNECTTIMEOUT => 5,
+                  CURLOPT_TIMEOUT => 20,
+                  CURLOPT_SSL_VERIFYPEER => true,
+                  CURLOPT_SSL_VERIFYHOST => 2,
+                  CURLOPT_FOLLOWLOCATION => true,
+                  CURLOPT_MAXREDIRS => 3,
+                  CURLOPT_ENCODING => '',
+              ]);
+              $body = curl_exec($ch);
+              $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+              curl_close($ch);
+              if ($body === false || $code < 200 || $code >= 300) return null;
+              $decoded = json_decode($body, true);
+              return is_array($decoded) ? $decoded : null;
           }
-          
-          function pending_invoice_ids(array $saldo): array {
-            $out=[];
-            $items=is_array($saldo["facturas"]??null)?$saldo["facturas"]:[];
-            foreach($items as $invoice){
-              if(!is_array($invoice))continue;
-              $id=trim((string)pr_first_value($invoice,["id_factura","id"],""));
-              if($id!=="")$out[$id]=true;
-            }
-            return $out;
+
+          function items(array $payload): array {
+              if (is_array($payload['results'] ?? null)) return $payload['results'];
+              return array_is_list($payload) ? $payload : [$payload];
           }
-          
-          $today=(new DateTimeImmutable("now",new DateTimeZone("America/Caracas")))->format("Y-m-d");
-          $ledger=pr_load_promise_ledger();
-          $checked=0;$breached=0;$fulfilled=0;$errors=0;
-          $saldoCache=[];
-          
-          foreach($ledger as $entry){
-            if(!is_array($entry)||!empty($entry["fulfilled_at"])||!empty($entry["breached_at"]))continue;
-            $deadline=trim((string)($entry["deadline"]??""));
-            if($deadline===""||$deadline>=$today)continue;
-            $serviceId=trim((string)($entry["service_id"]??""));
-            $invoiceId=trim((string)($entry["invoice_id"]??""));
-            $ledgerKey=trim((string)($entry["ledger_key"]??""));
-            if($serviceId===""||$invoiceId===""||$ledgerKey===""){$errors++;continue;}
-            $checked++;
-          
-            if(!array_key_exists($serviceId,$saldoCache)){
-              $saldoCache[$serviceId]=wh_get_json(rtrim(WISPHUB_API_URL,"/")."/clientes/".rawurlencode($serviceId)."/saldo/");
-            }
-            $saldo=$saldoCache[$serviceId];
-            if(!is_array($saldo)){$errors++;continue;}
-          
-            $pending=pending_invoice_ids($saldo);
-            if(!isset($pending[$invoiceId])){
-              if(pr_update_promise_ledger_entry($ledgerKey,["fulfilled_at"=>date(DATE_ATOM),"resolution"=>"invoice_not_pending_after_hourly_sweep"]))$fulfilled++;else $errors++;
-              continue;
-            }
-          
-            $deadlineDate=DateTimeImmutable::createFromFormat("!Y-m-d",$deadline,new DateTimeZone("America/Caracas"));
-            if(!$deadlineDate){$errors++;continue;}
-            $incidentDate=$deadlineDate->modify("+1 day");
-            $client=[
-              "nombre"=>trim((string)($entry["client_name"]??"Cliente")),
-              "id_servicio"=>$serviceId,
-              "id_cliente"=>trim((string)($entry["client_id"]??"")),
-              "usuario"=>pr_normalize_username($entry["username"]??""),
-              "telefono"=>pr_normalize_phone($entry["phone"]??""),
-              "cedula"=>trim((string)($entry["cedula"]??"")),
-              "correo"=>trim((string)($entry["email"]??""))
-            ];
-            $restriction=pr_create_restriction_record($client,$incidentDate,"promise-ledger-hourly-sweep","Restricción automática: factura pendiente después de la fecha prometida.","system-hourly-sweep");
-            if(!$restriction){$errors++;continue;}
-            if(!pr_update_promise_ledger_entry($ledgerKey,["breached_at"=>date(DATE_ATOM),"restriction_id"=>$restriction["id"]??null,"resolution"=>"invoice_still_pending_after_hourly_sweep"])){$errors++;continue;}
-            $breached++;
+
+          function parse_date($value): ?DateTimeImmutable {
+              $raw = trim((string)$value);
+              if ($raw === '') return null;
+              $tz = new DateTimeZone('America/Caracas');
+              foreach (['!Y-m-d', '!d/m/Y', '!Y-m-d H:i:s', '!d/m/Y H:i'] as $format) {
+                  $d = DateTimeImmutable::createFromFormat($format, $raw, $tz);
+                  if ($d instanceof DateTimeImmutable) return $d;
+              }
+              try { return new DateTimeImmutable($raw, $tz); } catch (Throwable $e) { return null; }
           }
-          echo "SUMMARY checked=$checked breached=$breached fulfilled=$fulfilled errors=$errors\n";
-          if($errors>0) exit(2);
-          
+
+          function invoice_is_unpaid(array $invoice): bool {
+              $status = strtolower(trim((string)pr_first_value($invoice, ['estado','status','estado_factura'], '')));
+              if (in_array($status, ['2','pendiente','por_pagar','por pagar','unpaid','vencida','vencido','overdue'], true)) return true;
+              foreach (['saldo','saldo_pendiente','balance','monto_pendiente'] as $key) {
+                  if (isset($invoice[$key]) && is_numeric($invoice[$key]) && (float)$invoice[$key] > 0) return true;
+              }
+              return false;
+          }
+
+          function promise_invoice_id(array $promise): string {
+              foreach (['id_factura','factura_id','invoice_id'] as $key) {
+                  if (isset($promise[$key]) && $promise[$key] !== '') return pr_scalar_id($promise[$key]);
+              }
+              return isset($promise['factura']) ? pr_scalar_id($promise['factura']) : '';
+          }
+
+          function invoice_client(array $invoice): array {
+              $client = is_array($invoice['cliente'] ?? null) ? $invoice['cliente'] : [];
+              $service = pr_first_value($invoice, ['id_servicio','servicio_id','servicio'], '');
+              $serviceId = pr_scalar_id($service);
+              if ($serviceId === '' && isset($client['id_servicio'])) $serviceId = pr_scalar_id($client['id_servicio']);
+              $clientId = pr_scalar_id(pr_first_value($invoice, ['id_cliente','cliente_id'], ''));
+              if ($clientId === '') $clientId = pr_scalar_id(pr_first_value($client, ['id_cliente','id','pk'], ''));
+              return [
+                  'nombre' => trim((string)pr_first_value($client, ['nombre','name','cliente'], 'Cliente')),
+                  'id_servicio' => $serviceId,
+                  'id_cliente' => $clientId,
+                  'usuario' => pr_normalize_username(pr_first_value($client, ['usuario','usuario_portal','username'], '')),
+                  'telefono' => pr_normalize_phone(pr_first_value($client, ['telefono','movil','celular','phone'], '')),
+                  'cedula' => trim((string)pr_first_value($client, ['cedula','documento','rif'], '')),
+                  'correo' => trim((string)pr_first_value($client, ['correo','email'], '')),
+              ];
+          }
+
+          $today = new DateTimeImmutable('today', new DateTimeZone('America/Caracas'));
+          $base = rtrim(WISPHUB_API_URL, '/') . '/promesas-de-pago/';
+          $offset = 0;
+          $limit = 200;
+          $maxPages = 60;
+          $checked = 0;
+          $breached = 0;
+          $alreadyRestricted = 0;
+          $fulfilled = 0;
+          $errors = 0;
+          $records = pr_load_records();
+          $recordsChanged = false;
+
+          for ($page = 0; $page < $maxPages; $page++) {
+              $payload = wh_get_json($base . '?limit=' . $limit . '&offset=' . $offset);
+              if (!is_array($payload)) { $errors++; break; }
+              $batch = items($payload);
+              if (!$batch) break;
+
+              foreach ($batch as $promise) {
+                  if (!is_array($promise)) continue;
+                  $deadline = parse_date(pr_first_value($promise, ['fecha_limite_de_pago','fecha_limite','fecha','fecha_vencimiento'], ''));
+                  if (!$deadline) continue;
+
+                  $incidentDate = $deadline->setTime(0,0)->modify('+1 day');
+                  if ($incidentDate > $today) continue;
+
+                  $invoiceId = promise_invoice_id($promise);
+                  if ($invoiceId === '') continue;
+                  $checked++;
+
+                  $invoice = wh_get_json(rtrim(WISPHUB_API_URL, '/') . '/facturas/' . rawurlencode($invoiceId) . '/');
+                  if (!is_array($invoice)) { $errors++; continue; }
+                  if (!invoice_is_unpaid($invoice)) { $fulfilled++; continue; }
+
+                  $client = invoice_client($invoice);
+                  $identifiers = pr_identifiers_from_client($client);
+                  if (($identifiers['service_id'] ?? '') === '' && ($identifiers['client_id'] ?? '') === '' && ($identifiers['username'] ?? '') === '') {
+                      $errors++;
+                      continue;
+                  }
+
+                  $duplicate = false;
+                  foreach ($records as $existing) {
+                      if (pr_record_is_active($existing) && pr_records_match($existing, $identifiers)) {
+                          $duplicate = true;
+                          break;
+                      }
+                  }
+                  if ($duplicate) { $alreadyRestricted++; continue; }
+
+                  $startsAt = $incidentDate->setTime(0,0,0);
+                  $endsAt = pr_add_months_clamped($incidentDate, 3)->setTime(0,0,0);
+                  $record = [
+                      'id' => bin2hex(random_bytes(8)),
+                      'client_name' => $client['nombre'] ?: 'Cliente',
+                      'service_id' => $identifiers['service_id'] ?? '',
+                      'client_id' => $identifiers['client_id'] ?? '',
+                      'username' => $identifiers['username'] ?? '',
+                      'phone' => $identifiers['phone'] ?? '',
+                      'cedula' => $client['cedula'] ?? '',
+                      'email' => $client['correo'] ?? '',
+                      'reason' => 'Incumplimiento de promesa de pago',
+                      'note' => 'Restricción automática: promesa vencida con factura pendiente #' . $invoiceId . '.',
+                      'incident_date' => $incidentDate->format('Y-m-d'),
+                      'starts_at' => $startsAt->format(DATE_ATOM),
+                      'ends_at' => $endsAt->format(DATE_ATOM),
+                      'created_at' => date(DATE_ATOM),
+                      'created_by' => 'system-hourly-sweep',
+                      'revoked_at' => null,
+                      'revoked_by' => null,
+                  ];
+                  $records[] = $record;
+                  $recordsChanged = true;
+                  $breached++;
+              }
+
+              $received = count($batch);
+              $offset += $received;
+              $total = isset($payload['count']) && is_numeric($payload['count']) ? (int)$payload['count'] : null;
+              if ($received === 0) break;
+              if ($total !== null && $offset >= $total) break;
+              if ($total === null && $received < $limit && empty($payload['next'])) break;
+          }
+
+          if ($recordsChanged && !pr_save_records($records)) {
+              fwrite(STDERR, "Could not save promise restrictions.\n");
+              exit(2);
+          }
+
+          echo "SUMMARY checked=$checked breached=$breached already_restricted=$alreadyRestricted fulfilled=$fulfilled errors=$errors\n";
+          if ($errors > 0) exit(2);
           PHP
+
           scp -i ~/.ssh/hostinger -P 65002 /tmp/promise_hourly_sweep.php "$HOSTINGER_USER@$HOSTINGER_HOST:/tmp/promise_hourly_sweep.php"
           ssh -i ~/.ssh/hostinger -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'cd "$HOME/domains/wifirapidito.com/public_html" && php /tmp/promise_hourly_sweep.php'
+
+      - name: Publish sweep status
+        if: success() && github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              context: 'Promise Breach Sweep',
+              description: 'Overdue payment promises reconciled against WispHub',
+            });
