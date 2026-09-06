@@ -21,7 +21,7 @@ function pr_respond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    pr_respond(200, ['status' => 'ready', 'version' => '1.1-promise-restrictions']);
+    pr_respond(200, ['status' => 'ready', 'version' => '1.2-auto-breach-restrictions']);
 }
 
 require_once __DIR__ . '/promise_restrictions_lib.php';
@@ -163,6 +163,160 @@ function pr_request_identifiers($source) {
     ];
 }
 
+
+function pr_list_items($payload) {
+    if (!is_array($payload)) return [];
+    if (is_array($payload['results'] ?? null)) return $payload['results'];
+    return array_is_list($payload) ? $payload : [$payload];
+}
+
+function pr_parse_promise_date($value) {
+    $raw = trim((string) $value);
+    if ($raw === '') return null;
+    $tz = new DateTimeZone('America/Caracas');
+    foreach (['!Y-m-d', '!d/m/Y', '!Y-m-d H:i:s', '!d/m/Y H:i'] as $format) {
+        $date = DateTimeImmutable::createFromFormat($format, $raw, $tz);
+        if ($date instanceof DateTimeImmutable) return $date;
+    }
+    try {
+        return new DateTimeImmutable($raw, $tz);
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+function pr_invoice_is_unpaid($invoice) {
+    if (!is_array($invoice)) return false;
+    $status = strtolower(trim((string) pr_first_value($invoice, ['estado', 'status', 'estado_factura'], '')));
+    if (in_array($status, ['2', 'pendiente', 'por_pagar', 'por pagar', 'unpaid', 'vencida', 'vencido', 'overdue'], true)) {
+        return true;
+    }
+    foreach (['saldo', 'saldo_pendiente', 'balance', 'monto_pendiente'] as $key) {
+        if (isset($invoice[$key]) && is_numeric($invoice[$key]) && (float) $invoice[$key] > 0) return true;
+    }
+    return false;
+}
+
+function pr_promise_invoice_id($promise) {
+    if (!is_array($promise)) return '';
+    foreach (['id_factura', 'factura_id', 'invoice_id'] as $key) {
+        if (isset($promise[$key]) && $promise[$key] !== '') return pr_scalar_id($promise[$key]);
+    }
+    if (isset($promise['factura'])) return pr_scalar_id($promise['factura']);
+    return '';
+}
+
+function pr_promise_matches_service($promise, $serviceId) {
+    if (!is_array($promise) || $serviceId === '') return false;
+    $candidates = [
+        $promise['id_servicio'] ?? '',
+        $promise['servicio_id'] ?? '',
+        $promise['cliente'] ?? '',
+        $promise['servicio'] ?? '',
+    ];
+    foreach ($candidates as $candidate) {
+        if (pr_scalar_id($candidate) === $serviceId || trim((string) $candidate) === $serviceId) return true;
+    }
+    return false;
+}
+
+function pr_auto_restrict_broken_promise($identifiers, &$error = null) {
+    $serviceId = trim((string) ($identifiers['service_id'] ?? ''));
+    if ($serviceId === '') return null;
+
+    $url = rtrim(WISPHUB_API_URL, '/') . '/promesas-de-pago/?cliente=' . rawurlencode($serviceId) . '&limit=100';
+    $payload = pr_wisphub_get($url, $error);
+    if (!is_array($payload)) return null;
+
+    $today = new DateTimeImmutable('today', new DateTimeZone('America/Caracas'));
+    $breaches = [];
+
+    foreach (pr_list_items($payload) as $promise) {
+        if (!is_array($promise)) continue;
+        if (!pr_promise_matches_service($promise, $serviceId)) {
+            // WispHub's cliente filter may already scope correctly; only reject
+            // when the promise explicitly exposes a different service.
+            $explicitService = pr_scalar_id($promise['id_servicio'] ?? ($promise['servicio'] ?? ''));
+            if ($explicitService !== '' && $explicitService !== $serviceId) continue;
+        }
+
+        $deadline = pr_parse_promise_date(
+            pr_first_value($promise, ['fecha_limite_de_pago', 'fecha_limite', 'fecha', 'fecha_vencimiento'], '')
+        );
+        if (!$deadline) continue;
+
+        // A promise due on a given date remains valid through 23:59.
+        // The breach begins the following day.
+        $breachDate = $deadline->setTime(0, 0)->modify('+1 day');
+        if ($breachDate > $today) continue;
+
+        $invoiceId = pr_promise_invoice_id($promise);
+        if ($invoiceId === '') continue;
+
+        $invoiceError = null;
+        $invoice = pr_wisphub_get(rtrim(WISPHUB_API_URL, '/') . '/facturas/' . rawurlencode($invoiceId) . '/', $invoiceError);
+        if (!is_array($invoice) || !pr_invoice_is_unpaid($invoice)) continue;
+
+        $breaches[] = ['date' => $breachDate, 'invoice_id' => $invoiceId];
+    }
+
+    if (!$breaches) return null;
+    usort($breaches, fn($a, $b) => $b['date']->getTimestamp() <=> $a['date']->getTimestamp());
+    $breach = $breaches[0];
+
+    $clientLookupError = null;
+    $client = pr_find_client($serviceId, $clientLookupError);
+    if (!$client) {
+        $client = [
+            'name' => 'Cliente',
+            'service_id' => $serviceId,
+            'client_id' => trim((string) ($identifiers['client_id'] ?? '')),
+            'username' => pr_normalize_username($identifiers['username'] ?? ''),
+            'phone' => pr_normalize_phone($identifiers['phone'] ?? ''),
+            'cedula' => '',
+            'email' => '',
+        ];
+    }
+
+    $records = pr_load_records();
+    $createdBy = 'auto-wisphub';
+    foreach ($records as &$existing) {
+        if (pr_record_is_active($existing) && pr_records_match($existing, $client)) {
+            return $existing;
+        }
+    }
+    unset($existing);
+
+    $startsAt = $breach['date']->setTime(0, 0, 0);
+    $endsAt = pr_add_months_clamped($breach['date'], 3)->setTime(0, 0, 0);
+    $record = [
+        'id' => bin2hex(random_bytes(8)),
+        'client_name' => $client['name'] ?? 'Cliente',
+        'service_id' => $client['service_id'] ?? $serviceId,
+        'client_id' => $client['client_id'] ?? '',
+        'username' => $client['username'] ?? '',
+        'phone' => $client['phone'] ?? '',
+        'cedula' => $client['cedula'] ?? '',
+        'email' => $client['email'] ?? '',
+        'reason' => 'Incumplimiento de promesa de pago',
+        'note' => 'Restricción aplicada automáticamente al detectar promesa vencida con factura pendiente #' . $breach['invoice_id'] . '.',
+        'incident_date' => $breach['date']->format('Y-m-d'),
+        'starts_at' => $startsAt->format(DATE_ATOM),
+        'ends_at' => $endsAt->format(DATE_ATOM),
+        'created_at' => date(DATE_ATOM),
+        'created_by' => $createdBy,
+        'revoked_at' => null,
+        'revoked_by' => null,
+    ];
+    $records[] = $record;
+
+    if (!pr_save_records($records)) {
+        $error = 'No pudimos guardar la restricción automática.';
+        return null;
+    }
+    return $record;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $action = (string) ($_GET['action'] ?? 'check');
 
@@ -172,7 +326,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         if ($provided < 2) {
             pr_respond(422, ['error' => 'Se requieren al menos dos identificadores del cliente.']);
         }
-        pr_respond(200, pr_public_payload(pr_find_active_restriction($identifiers)));
+        $restriction = pr_find_active_restriction($identifiers);
+        if (!$restriction) {
+            $autoError = null;
+            $restriction = pr_auto_restrict_broken_promise($identifiers, $autoError);
+        }
+        pr_respond(200, pr_public_payload($restriction));
     }
 
     if ($action === 'list') {
@@ -183,7 +342,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             $record['status'] = !empty($record['revoked_at']) ? 'revoked' : (pr_record_is_active($record) ? 'active' : 'expired');
             return $record;
         }, $records);
-        pr_respond(200, ['restrictions' => $result, 'version' => '1.1-promise-restrictions']);
+        pr_respond(200, ['restrictions' => $result, 'version' => '1.2-auto-breach-restrictions']);
     }
 
     pr_respond(404, ['error' => 'Acción no encontrada.']);
