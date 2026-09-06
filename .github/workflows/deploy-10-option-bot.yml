@@ -55,7 +55,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar -C vps -czf /tmp/rapidito-bot-$GITHUB_SHA.tgz --exclude='__pycache__' --exclude='*.pyc' *.py requirements-bot.txt Dockerfile.bot
+          tar -czf /tmp/rapidito-bot-$GITHUB_SHA.tgz --exclude='__pycache__' --exclude='*.pyc' -C vps .
           scp -i ~/.ssh/key -P "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             /tmp/rapidito-bot-$GITHUB_SHA.tgz \
             "$TARGET_USER@$TARGET_HOST:/root/rapidito-bot-$GITHUB_SHA.tgz"
