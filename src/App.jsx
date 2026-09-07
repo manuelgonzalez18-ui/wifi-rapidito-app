@@ -44,6 +44,7 @@ const StaffDashboard = lazyWithRecovery(() => import('./pages/Staff/Dashboard'),
 const StaffSupportDashboard = lazyWithRecovery(() => import('./pages/Staff/SupportDashboard'), 'staff-support');
 const StaffAccess = lazyWithRecovery(() => import('./pages/Staff/StaffAccess'), 'staff-access');
 const PromiseRestrictions = lazyWithRecovery(() => import('./pages/Staff/PromiseRestrictions'), 'promise-restrictions');
+const ValidatedPayments = lazyWithRecovery(() => import('./pages/Staff/ValidatedPayments'), 'validated-payments');
 const LiveMonitor = lazyWithRecovery(() => import('./pages/Admin/LiveMonitor'), 'live-monitor');
 const FinanceDashboard = lazyWithRecovery(() => import('./pages/Admin/FinanceDashboard'), 'finance-dashboard');
 
@@ -128,6 +129,7 @@ function App() {
             <Route path="/staff" element={<ProtectedRoute role="staff"><Outlet /></ProtectedRoute>}>
               <Route index element={<StaffDashboard />} />
               <Route path="support" element={<ProtectedRoute permission="support"><StaffSupportDashboard /></ProtectedRoute>} />
+              <Route path="validated-payments" element={<ProtectedRoute permission="finance"><ValidatedPayments /></ProtectedRoute>} />
               <Route path="access" element={<ProtectedRoute permission="manage_staff"><StaffAccess /></ProtectedRoute>} />
               <Route path="promise-restrictions" element={<ProtectedRoute permission="manage_staff"><PromiseRestrictions /></ProtectedRoute>} />
               <Route path="clients" element={<ProtectedRoute permission="manage_staff"><Placeholder title="Gestión de clientes" description="Búsqueda y ficha operativa de clientes." /></ProtectedRoute>} />
