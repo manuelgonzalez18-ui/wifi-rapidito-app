@@ -15,7 +15,7 @@ function auditRespond($status, $payload) {
 require_once __DIR__ . '/payment_audit_lib.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    auditRespond(200, ['status' => 'ready', 'version' => '1.3-payment-audit-30d-all']);
+    auditRespond(200, ['status' => 'ready', 'version' => '1.4-payment-audit-30d-all-sources']);
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -75,6 +75,17 @@ function auditScalar($value, $keys = []) {
         return '';
     }
     return is_scalar($value) ? (string)$value : '';
+}
+
+function auditTimestamp($row) {
+    if (!is_array($row)) return false;
+    foreach (['payment_date', 'created_at', 'fecha_pago', 'fecha', 'fecha_registro'] as $key) {
+        $value = $row[$key] ?? '';
+        if ($value === null || $value === '') continue;
+        $ts = strtotime((string)$value);
+        if ($ts !== false) return $ts;
+    }
+    return false;
 }
 
 function wisphubGetPaymentsPage($offset, $limit) {
@@ -182,6 +193,8 @@ function wisphubRecentPayments($days = 30) {
     return $out;
 }
 
+$days = 30;
+$cutoff = strtotime('-' . $days . ' days');
 $limit = max(1, min(5000, (int)($_GET['limit'] ?? 2000)));
 $path = paymentAuditStorePath();
 $items = [];
@@ -189,34 +202,57 @@ if (is_file($path)) {
     $lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
     foreach (array_reverse($lines) as $line) {
         $row = json_decode($line, true);
-        if (is_array($row)) $items[] = $row;
+        if (!is_array($row)) continue;
+        $ts = auditTimestamp($row);
+        if ($ts === false || $ts < $cutoff) continue;
+        $items[] = $row;
     }
 }
 
-// Show every payment WispHub exposes for the last 30 days. The local audit
-// entries are merged so portal/bot payments keep their precise origin.
-$recent = wisphubRecentPayments(30);
+// Every source is limited to the same 30-day window: Portal, WhatsApp bot and
+// WispHub history. Local audit entries are merged first so they preserve their
+// precise source when the same payment also appears in WispHub.
+$recent = wisphubRecentPayments($days);
 $seen = [];
 $merged = [];
 foreach (array_merge($items, $recent) as $row) {
     if (!is_array($row)) continue;
-    $idKey = strtolower((string)($row['payment_id'] ?? $row['id'] ?? ''));
-    $compositeKey = strtolower(($row['invoice_id'] ?? '') . '|' . ($row['reference'] ?? '') . '|' . ($row['payment_date'] ?? '') . '|' . ($row['amount'] ?? ''));
-    $key = $idKey !== '' ? 'id:' . $idKey : 'cmp:' . $compositeKey;
-    if (isset($seen[$key])) continue;
+    $reference = strtolower(trim((string)($row['reference'] ?? '')));
+    $invoiceId = strtolower(trim((string)($row['invoice_id'] ?? '')));
+    $paymentDate = strtolower(trim((string)($row['payment_date'] ?? '')));
+    $amount = strtolower(trim((string)($row['amount'] ?? '')));
+    $paymentId = strtolower(trim((string)($row['payment_id'] ?? '')));
+
+    // Prefer a composite payment identity so a Portal/Bot audit row suppresses
+    // the duplicate WispHub historical row while keeping the original source.
+    $composite = $invoiceId . '|' . $reference . '|' . $paymentDate . '|' . $amount;
+    $key = trim($composite, '|') !== '' ? 'cmp:' . $composite : 'id:' . ($paymentId !== '' ? $paymentId : strtolower((string)($row['id'] ?? '')));
+    if ($key === 'id:' || isset($seen[$key])) continue;
     $seen[$key] = true;
     $merged[] = $row;
 }
 
 usort($merged, function($a, $b) {
-    return strcmp((string)($b['created_at'] ?? ''), (string)($a['created_at'] ?? ''));
+    $aTs = auditTimestamp($a) ?: 0;
+    $bTs = auditTimestamp($b) ?: 0;
+    return $bTs <=> $aTs;
 });
 $merged = array_slice($merged, 0, $limit);
+
+$sourceCounts = [
+    'portal' => 0,
+    'whatsapp_bot' => 0,
+    'wisphub_history' => 0,
+];
+foreach ($merged as $row) {
+    $source = $row['source'] ?? '';
+    if (array_key_exists($source, $sourceCounts)) $sourceCounts[$source] += 1;
+}
 
 auditRespond(200, [
     'payments' => $merged,
     'count' => count($merged),
-    'historical_days' => 30,
-    'wisphub_count' => count($recent),
-    'version' => '1.3-payment-audit-30d-all',
+    'historical_days' => $days,
+    'source_counts' => $sourceCounts,
+    'version' => '1.4-payment-audit-30d-all-sources',
 ]);
