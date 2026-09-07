@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Users, Wifi, WifiOff, RefreshCw, UserRound } from 'lucide-react';
+import { Search, Users, Wifi, WifiOff, RefreshCw, UserRound, CreditCard, Smartphone, Globe2 } from 'lucide-react';
 import api from '../../api/client';
 import {
     EmptyState,
@@ -52,6 +52,8 @@ const StaffDashboard = () => {
     const [error, setError] = useState('');
     const [query, setQuery] = useState('');
     const [reloadKey, setReloadKey] = useState(0);
+    const [payments, setPayments] = useState([]);
+    const [paymentsLoading, setPaymentsLoading] = useState(true);
 
     useEffect(() => {
         let active = true;
@@ -91,7 +93,29 @@ const StaffDashboard = () => {
             }
         };
 
+        const fetchPayments = async () => {
+            setPaymentsLoading(true);
+            try {
+                const response = await api.get('/payment_audit.php?limit=100', {
+                    withCredentials: true,
+                    timeout: 15000,
+                    headers: { 'Cache-Control': 'no-cache' },
+                });
+                if (active) setPayments(Array.isArray(response?.data?.payments) ? response.data.payments : []);
+            } catch (requestError) {
+                // Finanzas y administradores pueden ver este bloque. Otras cuentas
+                // simplemente continúan usando el dashboard sin el historial.
+                if (active && requestError?.response?.status !== 403) {
+                    console.error('Automatic payment audit load error:', requestError);
+                }
+                if (active) setPayments([]);
+            } finally {
+                if (active) setPaymentsLoading(false);
+            }
+        };
+
         fetchClients();
+        fetchPayments();
         return () => { active = false; };
     }, [reloadKey]);
 
@@ -173,6 +197,53 @@ const StaffDashboard = () => {
                     {meta.warning}
                 </div>
             ) : null}
+
+            <Surface className="overflow-hidden">
+                <div className="flex flex-col gap-3 border-b border-white/8 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                    <div>
+                        <h2 className="flex items-center gap-2 font-semibold text-white"><CreditCard size={18} className="text-emerald-300" /> Pagos validados automáticamente</h2>
+                        <p className="mt-1 text-xs text-slate-500">Pagos confirmados por Banesco y registrados en WispHub desde el portal o el asistente virtual.</p>
+                    </div>
+                    <span className="rounded-full border border-emerald-400/15 bg-emerald-400/[0.07] px-3 py-1 text-xs font-semibold text-emerald-300">
+                        {payments.length} registro{payments.length === 1 ? '' : 's'}
+                    </span>
+                </div>
+
+                {paymentsLoading ? (
+                    <div className="p-5 text-sm text-slate-500">Cargando pagos validados…</div>
+                ) : payments.length === 0 ? (
+                    <div className="p-6 text-sm text-slate-500">Todavía no hay pagos automáticos registrados en el historial del panel.</div>
+                ) : (
+                    <div className="max-h-[430px] divide-y divide-white/6 overflow-y-auto">
+                        {payments.slice(0, 50).map((payment) => {
+                            const fromBot = payment.source === 'whatsapp_bot';
+                            const SourceIcon = fromBot ? Smartphone : Globe2;
+                            const amount = Number(payment.amount);
+                            return (
+                                <div key={payment.id || `${payment.source}-${payment.invoice_id}-${payment.reference}`} className="grid gap-3 p-4 sm:grid-cols-[1.3fr_.7fr_.7fr_.8fr_auto] sm:items-center sm:px-5">
+                                    <div className="min-w-0">
+                                        <p className="truncate font-semibold text-white">{payment.client_name || payment.username || 'Cliente'}</p>
+                                        <p className="mt-1 truncate text-xs text-slate-500">Factura #{payment.invoice_id || '—'} · Ref. {payment.reference || '—'}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600">Monto</p>
+                                        <p className="mt-1 text-sm font-semibold text-slate-200">{Number.isFinite(amount) ? `Bs. ${amount.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600">Fecha</p>
+                                        <p className="mt-1 text-sm text-slate-300">{payment.payment_date || payment.created_at?.slice(0, 10) || '—'}</p>
+                                    </div>
+                                    <div className="flex items-center gap-2 text-sm text-slate-300">
+                                        <SourceIcon size={16} className={fromBot ? 'text-violet-300' : 'text-cyan-300'} />
+                                        {fromBot ? 'Asistente virtual' : 'Portal'}
+                                    </div>
+                                    <StatusPill tone="success">Validado</StatusPill>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </Surface>
 
             <Surface className="p-4">
                 <div className="relative max-w-xl">
