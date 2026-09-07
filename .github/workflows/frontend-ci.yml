@@ -191,6 +191,7 @@ jobs:
             SUPPORT_HEALTH="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/support_dashboard.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             STAFF_HEALTH="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/staff_auth.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             CLIENTS_HEALTH="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/staff_clients.php?health=$GITHUB_SHA" 2>/dev/null || true)"
+            INDEX_HEADERS="$(curl -fsSI -H 'Cache-Control: no-cache' "https://wifirapidito.com/?sha=$GITHUB_SHA" 2>/dev/null || true)"
             INDEX_HTML="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/?sha=$GITHUB_SHA" 2>/dev/null || true)"
             ASSETS_OK=1
 
@@ -208,6 +209,7 @@ jobs:
               && grep -q '5.0-resilient' <<<"$LOGIN_HEALTH" \
               && grep -q '1.2-support-offset-pagination' <<<"$SUPPORT_HEALTH" \
               && grep -q '2.1-admin-reset' <<<"$STAFF_HEALTH" \
+              && grep -qi 'clear-site-data:.*cache' <<<"$INDEX_HEADERS" \
               && grep -q '1.1-staff-clients-offset' <<<"$CLIENTS_HEALTH" \
               && [[ "$ASSETS_OK" == 1 ]]; then
               echo "Public Hostinger frontend, assets and portal backend verified."
