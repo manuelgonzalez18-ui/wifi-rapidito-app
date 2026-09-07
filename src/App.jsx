@@ -5,25 +5,47 @@ import useAuthStore from './auth/authStore';
 import DashboardLayout from './layouts/DashboardLayout';
 import WhatsAppBubble from './components/ui/WhatsAppBubble';
 
-const LoginPage = lazy(() => import('./pages/Login'));
-const ClientDashboard = lazy(() => import('./pages/Client/Dashboard'));
-const PaymentReport = lazy(() => import('./pages/Client/PaymentReport'));
-const Invoices = lazy(() => import('./pages/Client/Invoices'));
-const InvoiceDetail = lazy(() => import('./pages/Client/InvoiceDetail'));
-const Support = lazy(() => import('./pages/Client/Support'));
-const Settings = lazy(() => import('./pages/Client/Settings'));
-const AppDownload = lazy(() => import('./pages/AppDownload'));
-const RequestPromise = lazy(() => import('./pages/Client/RequestPromise'));
-const PromiseGate = lazy(() => import('./pages/Client/PromiseGate'));
-const ConfirmPromisePayment = lazy(() => import('./pages/Client/ConfirmPromisePayment'));
-const PaymentStoryView = lazy(() => import('./pages/Client/PaymentStoryView'));
-const ConnectionDoctor = lazy(() => import('./pages/ConnectionDoctor'));
-const StaffDashboard = lazy(() => import('./pages/Staff/Dashboard'));
-const StaffSupportDashboard = lazy(() => import('./pages/Staff/SupportDashboard'));
-const StaffAccess = lazy(() => import('./pages/Staff/StaffAccess'));
-const PromiseRestrictions = lazy(() => import('./pages/Staff/PromiseRestrictions'));
-const LiveMonitor = lazy(() => import('./pages/Admin/LiveMonitor'));
-const FinanceDashboard = lazy(() => import('./pages/Admin/FinanceDashboard'));
+const lazyWithRecovery = (loader, key) => lazy(async () => {
+  try {
+    const module = await loader();
+    sessionStorage.removeItem(`rapidito_chunk_retry_${key}`);
+    return module;
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    const isChunkError = /dynamically imported module|failed to fetch|importing a module script|chunkloaderror/i.test(message);
+    const retryKey = `rapidito_chunk_retry_${key}`;
+
+    if (isChunkError && sessionStorage.getItem(retryKey) !== '1') {
+      sessionStorage.setItem(retryKey, '1');
+      const url = new URL(window.location.href);
+      url.searchParams.set('__refresh', Date.now().toString());
+      window.location.replace(url.toString());
+      return new Promise(() => {});
+    }
+
+    throw error;
+  }
+});
+
+const LoginPage = lazyWithRecovery(() => import('./pages/Login'), 'login');
+const ClientDashboard = lazyWithRecovery(() => import('./pages/Client/Dashboard'), 'client-dashboard');
+const PaymentReport = lazyWithRecovery(() => import('./pages/Client/PaymentReport'), 'payment-report');
+const Invoices = lazyWithRecovery(() => import('./pages/Client/Invoices'), 'invoices');
+const InvoiceDetail = lazyWithRecovery(() => import('./pages/Client/InvoiceDetail'), 'invoice-detail');
+const Support = lazyWithRecovery(() => import('./pages/Client/Support'), 'support');
+const Settings = lazyWithRecovery(() => import('./pages/Client/Settings'), 'settings');
+const AppDownload = lazyWithRecovery(() => import('./pages/AppDownload'), 'app-download');
+const RequestPromise = lazyWithRecovery(() => import('./pages/Client/RequestPromise'), 'request-promise');
+const PromiseGate = lazyWithRecovery(() => import('./pages/Client/PromiseGate'), 'promise-gate');
+const ConfirmPromisePayment = lazyWithRecovery(() => import('./pages/Client/ConfirmPromisePayment'), 'confirm-promise');
+const PaymentStoryView = lazyWithRecovery(() => import('./pages/Client/PaymentStoryView'), 'payment-story');
+const ConnectionDoctor = lazyWithRecovery(() => import('./pages/ConnectionDoctor'), 'connection-doctor');
+const StaffDashboard = lazyWithRecovery(() => import('./pages/Staff/Dashboard'), 'staff-dashboard');
+const StaffSupportDashboard = lazyWithRecovery(() => import('./pages/Staff/SupportDashboard'), 'staff-support');
+const StaffAccess = lazyWithRecovery(() => import('./pages/Staff/StaffAccess'), 'staff-access');
+const PromiseRestrictions = lazyWithRecovery(() => import('./pages/Staff/PromiseRestrictions'), 'promise-restrictions');
+const LiveMonitor = lazyWithRecovery(() => import('./pages/Admin/LiveMonitor'), 'live-monitor');
+const FinanceDashboard = lazyWithRecovery(() => import('./pages/Admin/FinanceDashboard'), 'finance-dashboard');
 
 const RouteLoader = () => (
   <div className="flex min-h-[45vh] items-center justify-center">
