@@ -14,6 +14,32 @@ import re
 import bot_logic as bot
 
 
+async def record_payment_audit(identity, invoice, data, result):
+    payload = {
+        "source": "whatsapp_bot",
+        "client_name": bot.display_name(identity),
+        "username": identity.get("username") or identity.get("user") or "",
+        "service_id": str(identity.get("service_id") or identity.get("id_servicio") or ""),
+        "invoice_id": str(bot.invoice_display(invoice)),
+        "reference": str(data.get("reference") or ""),
+        "amount": float(data.get("amount") or 0),
+        "currency": "VES",
+        "payment_date": str(data.get("payment_date") or ""),
+        "method": str(data.get("method_label") or "Transferencia Banesco"),
+        "banesco_status": "validated",
+        "wisphub_status": "registered",
+        "wisphub_task_id": str((result or {}).get("task_id") or ""),
+    }
+    try:
+        async with bot.httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.post("https://wifirapidito.com/payment_audit.php", json=payload)
+        if response.status_code not in (200, 201):
+            bot.logger.warning("Payment audit HTTP %s: %s", response.status_code, response.text[:200])
+    except Exception as exc:
+        bot.logger.warning("No se pudo registrar auditoría de pago: %s", exc)
+
+
+
 _original_process_user_message = bot.process_user_message
 _original_handle_payment_flow = bot.handle_payment_flow
 
@@ -156,6 +182,7 @@ async def handle_payment_flow(numero_cliente, state, mensaje):
 
         bank = bank_display(data)
         if ok:
+            await record_payment_audit(state["identity"], data["invoice"], data, result)
             report = "\n".join([
                 "🔔 *Pago Verificado Automáticamente*",
                 "—",
