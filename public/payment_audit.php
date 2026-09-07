@@ -64,7 +64,93 @@ if (!in_array('*', $permissions, true) && !in_array('finance', $permissions, tru
     auditRespond(403, ['error' => 'Tu cuenta no tiene permiso para consultar pagos validados.']);
 }
 
-$limit = max(1, min(500, (int)($_GET['limit'] ?? 100)));
+function auditScalar($value, $keys = []) {
+    if (is_array($value)) {
+        foreach ($keys as $key) {
+            if (isset($value[$key]) && $value[$key] !== '') return (string)$value[$key];
+        }
+        foreach (['nombre', 'name', 'usuario', 'username', 'id', 'id_factura', 'id_servicio'] as $key) {
+            if (isset($value[$key]) && $value[$key] !== '') return (string)$value[$key];
+        }
+        return '';
+    }
+    return is_scalar($value) ? (string)$value : '';
+}
+
+function wisphubRecentPayments($days = 7) {
+    require_once __DIR__ . '/config_wisphub.php';
+
+    $url = rtrim(WISPHUB_API_URL, '/') . '/pagos/?limit=500';
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => [
+            'Authorization: Api-Key ' . WISPHUB_TOKEN,
+            'Accept: application/json',
+        ],
+        CURLOPT_CONNECTTIMEOUT => 6,
+        CURLOPT_TIMEOUT => 18,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_ENCODING => '',
+    ]);
+
+    $body = curl_exec($ch);
+    $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $errno = curl_errno($ch);
+    curl_close($ch);
+
+    if ($errno !== 0 || $httpCode < 200 || $httpCode >= 300 || !$body) {
+        return [];
+    }
+
+    $data = json_decode($body, true);
+    if (!is_array($data)) return [];
+    $rows = is_array($data['results'] ?? null) ? $data['results'] : (array_is_list($data) ? $data : []);
+
+    $cutoff = strtotime('-' . max(1, (int)$days) . ' days');
+    $out = [];
+
+    foreach ($rows as $row) {
+        if (!is_array($row)) continue;
+
+        $dateRaw = $row['fecha_pago'] ?? $row['fecha'] ?? $row['fecha_creacion'] ?? $row['created_at'] ?? '';
+        $ts = $dateRaw ? strtotime((string)$dateRaw) : false;
+        if ($ts === false || $ts < $cutoff) continue;
+
+        $reference = trim((string)($row['referencia'] ?? $row['reference'] ?? $row['numero_referencia'] ?? ''));
+        if ($reference === '') continue;
+
+        $client = $row['cliente'] ?? $row['client'] ?? $row['usuario'] ?? $row['user'] ?? '';
+        $invoice = $row['factura'] ?? $row['invoice'] ?? $row['id_factura'] ?? '';
+        $service = $row['servicio'] ?? $row['service'] ?? $row['id_servicio'] ?? '';
+        $method = $row['forma_pago'] ?? $row['metodo_pago'] ?? $row['payment_method'] ?? '';
+        $amount = $row['total_cobrado'] ?? $row['monto'] ?? $row['cantidad'] ?? $row['total'] ?? null;
+
+        $out[] = [
+            'id' => 'wisphub-' . sha1(json_encode([$reference, $dateRaw, auditScalar($invoice)])),
+            'created_at' => date('c', $ts),
+            'source' => 'wisphub_history',
+            'client_name' => auditScalar($client, ['nombre', 'name', 'cliente']),
+            'username' => auditScalar($client, ['usuario', 'username']),
+            'service_id' => auditScalar($service, ['id_servicio', 'id']),
+            'invoice_id' => auditScalar($invoice, ['id_factura', 'id']),
+            'reference' => $reference,
+            'amount' => is_numeric($amount) ? (float)$amount : null,
+            'currency' => 'VES',
+            'payment_date' => date('Y-m-d', $ts),
+            'method' => auditScalar($method, ['nombre', 'name']),
+            'banesco_status' => 'historical_registered',
+            'wisphub_status' => 'registered',
+            'wisphub_task_id' => '',
+        ];
+    }
+
+    return $out;
+}
+
+$limit = max(1, min(500, (int)($_GET['limit'] ?? 300)));
 $path = paymentAuditStorePath();
 $items = [];
 if (is_file($path)) {
@@ -72,12 +158,29 @@ if (is_file($path)) {
     foreach (array_reverse($lines) as $line) {
         $row = json_decode($line, true);
         if (is_array($row)) $items[] = $row;
-        if (count($items) >= $limit) break;
     }
 }
 
+// Backfill the last seven days from WispHub so the dashboard is immediately
+// useful even though the local audit log only started recording recently.
+$recent = wisphubRecentPayments(7);
+$seen = [];
+$merged = [];
+foreach (array_merge($items, $recent) as $row) {
+    if (!is_array($row)) continue;
+    $key = strtolower(($row['invoice_id'] ?? '') . '|' . ($row['reference'] ?? '') . '|' . ($row['payment_date'] ?? ''));
+    if ($key === '||' || isset($seen[$key])) continue;
+    $seen[$key] = true;
+    $merged[] = $row;
+}
+usort($merged, function($a, $b) {
+    return strcmp((string)($b['created_at'] ?? ''), (string)($a['created_at'] ?? ''));
+});
+$merged = array_slice($merged, 0, $limit);
+
 auditRespond(200, [
-    'payments' => $items,
-    'count' => count($items),
-    'version' => '1.0-payment-audit',
+    'payments' => $merged,
+    'count' => count($merged),
+    'historical_days' => 7,
+    'version' => '1.1-payment-audit-week-backfill',
 ]);
