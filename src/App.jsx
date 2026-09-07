@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast';
 import useAuthStore from './auth/authStore';
 import DashboardLayout from './layouts/DashboardLayout';
 import WhatsAppBubble from './components/ui/WhatsAppBubble';
+import LoginPage from './pages/Login';
 
 const lazyWithRecovery = (loader, key) => lazy(async () => {
   try {
@@ -27,7 +28,6 @@ const lazyWithRecovery = (loader, key) => lazy(async () => {
   }
 });
 
-const LoginPage = lazyWithRecovery(() => import('./pages/Login'), 'login');
 const ClientDashboard = lazyWithRecovery(() => import('./pages/Client/Dashboard'), 'client-dashboard');
 const PaymentReport = lazyWithRecovery(() => import('./pages/Client/PaymentReport'), 'payment-report');
 const Invoices = lazyWithRecovery(() => import('./pages/Client/Invoices'), 'invoices');
