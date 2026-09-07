@@ -56,7 +56,7 @@ const ValidatedPayments = () => {
             <PageHeading
                 eyebrow="Finanzas"
                 title="Pagos validados"
-                description="Historial de pagos verificados automáticamente por Banesco y registrados en WispHub desde el portal y el asistente virtual."
+                description="Historial de pagos validados, incluyendo los registros disponibles en WispHub de los últimos 30 días y los nuevos pagos del portal y asistente virtual."
                 action={(
                     <button type="button" onClick={() => setReloadKey((value) => value + 1)} className="secondary-action">
                         <RefreshCw size={16} /> Actualizar
@@ -64,7 +64,7 @@ const ValidatedPayments = () => {
                 )}
             />
 
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Surface className="p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Total validados</p>
                     <p className="mt-2 text-2xl font-bold text-white">{payments.length}</p>
@@ -76,6 +76,10 @@ const ValidatedPayments = () => {
                 <Surface className="p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Asistente virtual</p>
                     <p className="mt-2 text-2xl font-bold text-violet-300">{payments.filter((item) => item.source === 'whatsapp_bot').length}</p>
+                </Surface>
+                <Surface className="p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">WispHub · 30 días</p>
+                    <p className="mt-2 text-2xl font-bold text-emerald-300">{payments.filter((item) => item.source === 'wisphub_history').length}</p>
                 </Surface>
             </div>
 
@@ -135,7 +139,7 @@ const ValidatedPayments = () => {
                                         </div>
                                         <div className="flex items-center gap-2 text-sm text-slate-300">
                                             <SourceIcon size={16} className={fromBot ? 'text-violet-300' : 'text-cyan-300'} />
-                                            {historical ? 'WispHub (última semana)' : (fromBot ? 'Asistente virtual' : 'Portal')}
+                                            {historical ? 'WispHub (últimos 30 días)' : (fromBot ? 'Asistente virtual' : 'Portal')}
                                         </div>
                                         <StatusPill tone="success">Validado</StatusPill>
                                     </div>
