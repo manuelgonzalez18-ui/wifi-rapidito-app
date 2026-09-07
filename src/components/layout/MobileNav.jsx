@@ -29,6 +29,7 @@ const MobileNav = () => {
     const staffItems = [
         { icon: Home, label: 'Resumen', to: '/staff' },
         { icon: LifeBuoy, label: 'Soporte', to: '/staff/support', permission: 'support' },
+        { icon: CreditCard, label: 'Pagos', to: '/staff/validated-payments', permission: 'finance' },
         { icon: ShieldOff, label: 'Promesas', to: '/staff/promise-restrictions', permission: 'manage_staff' },
         { icon: KeyRound, label: 'Accesos', to: '/staff/access', permission: 'manage_staff' },
         { icon: Activity, label: 'Red', to: '/staff/network', permission: 'network' },
