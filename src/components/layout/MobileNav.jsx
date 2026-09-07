@@ -1,5 +1,5 @@
-import { NavLink, useLocation } from 'react-router-dom';
-import { Home, FileText, CreditCard, LifeBuoy, Handshake, Activity, Settings, KeyRound, ShieldOff } from 'lucide-react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { Home, FileText, CreditCard, LifeBuoy, Handshake, Activity, Settings, KeyRound, ShieldOff, LogOut } from 'lucide-react';
 import useAuthStore from '../../auth/authStore';
 
 const can = (user, permission) => {
@@ -9,8 +9,14 @@ const can = (user, permission) => {
 };
 
 const MobileNav = () => {
-    const { user } = useAuthStore();
+    const { user, logout } = useAuthStore();
     const location = useLocation();
+    const navigate = useNavigate();
+
+    const handleLogout = async () => {
+        await logout();
+        navigate('/login', { replace: true });
+    };
 
     const clientItems = [
         { icon: Home, label: 'Inicio', to: '/client' },
@@ -56,6 +62,17 @@ const MobileNav = () => {
                         </NavLink>
                     );
                 })}
+                {user?.role === 'client' ? (
+                    <button
+                        type="button"
+                        onClick={handleLogout}
+                        aria-label="Cerrar sesión"
+                        className="relative flex min-h-14 min-w-[62px] flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[10px] font-semibold text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
+                    >
+                        <LogOut size={19} strokeWidth={2.2} />
+                        <span>Salir</span>
+                    </button>
+                ) : null}
             </div>
         </nav>
     );
