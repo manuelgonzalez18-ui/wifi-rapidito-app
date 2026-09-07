@@ -199,7 +199,7 @@ jobs:
                 echo "Missing public asset: $asset"
                 ASSETS_OK=0
               fi
-            done < <(grep -oE 'assets/[^"''' ]+\.(js|css)' <<<"$INDEX_HTML" | sort -u)
+            done < <(grep -oE 'assets/[^"[:space:]]+\.(js|css)' <<<"$INDEX_HTML" | sort -u)
 
             if [[ "$LIVE_SHA" == "$GITHUB_SHA" ]] \
               && grep -q '5.0-resilient' <<<"$LOGIN_HEALTH" \
