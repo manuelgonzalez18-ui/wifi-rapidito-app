@@ -9,6 +9,8 @@ header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
+require_once __DIR__ . '/payment_audit.php';
+
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
     exit;
@@ -204,6 +206,21 @@ try {
              $datos['nombre_usuario']
         );
         
+        appendPaymentAudit([
+            'source' => 'portal',
+            'client_name' => $datos['nombre_usuario'],
+            'username' => $datos['nombre_usuario'],
+            'invoice_id' => $datos['factura_id'],
+            'reference' => $datos['referencia'],
+            'amount' => $montoEnviado,
+            'currency' => 'VES',
+            'payment_date' => $datos['fecha_pago'],
+            'method' => 'Transferencia Banesco',
+            'banesco_status' => 'validated',
+            'wisphub_status' => 'registered',
+            'wisphub_task_id' => $resultado['task_id'] ?? '',
+        ]);
+
         echo json_encode([
             'status'       => 'success',
             'wisphub'      => true,
