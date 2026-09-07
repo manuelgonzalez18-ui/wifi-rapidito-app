@@ -161,9 +161,9 @@ if (is_file($path)) {
     }
 }
 
-// Backfill the last seven days from WispHub so the dashboard is immediately
+// Backfill the last thirty days from WispHub so the dashboard is immediately
 // useful even though the local audit log only started recording recently.
-$recent = wisphubRecentPayments(7);
+$recent = wisphubRecentPayments(30);
 $seen = [];
 $merged = [];
 foreach (array_merge($items, $recent) as $row) {
@@ -181,6 +181,6 @@ $merged = array_slice($merged, 0, $limit);
 auditRespond(200, [
     'payments' => $merged,
     'count' => count($merged),
-    'historical_days' => 7,
-    'version' => '1.1-payment-audit-week-backfill',
+    'historical_days' => 30,
+    'version' => '1.2-payment-audit-30d-backfill',
 ]);
