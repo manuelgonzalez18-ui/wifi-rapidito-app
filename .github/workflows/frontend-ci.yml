@@ -91,9 +91,19 @@ jobs:
           printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
           chmod 600 ~/.ssh/hostinger_deploy
           ssh-keygen -y -f ~/.ssh/hostinger_deploy > /dev/null
-          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/hostinger_deploy -p 65002 -o BatchMode=yes -o ConnectTimeout=15 \
-            "$HOSTINGER_USER@$HOSTINGER_HOST" 'echo "Hostinger SSH connection verified."'
+          : > ~/.ssh/known_hosts
+          connected=0
+          for attempt in {1..6}; do
+            echo "Hostinger SSH attempt $attempt/6..."
+            if ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && \
+               ssh -i ~/.ssh/hostinger_deploy -p 65002 -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+                 "$HOSTINGER_USER@$HOSTINGER_HOST" 'echo "Hostinger SSH connection verified."'; then
+              connected=1
+              break
+            fi
+            sleep $((attempt * 5))
+          done
+          test "$connected" = 1
 
       - name: Backup current Hostinger frontend and portal backend
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
