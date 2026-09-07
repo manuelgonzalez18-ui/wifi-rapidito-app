@@ -140,6 +140,7 @@ jobs:
           for file in login_wisphub.php staff_auth.php support_dashboard.php staff_clients.php; do
             test -s "dist/$file"
           done
+          test -s "dist/.htaccess"
 
           scp -i ~/.ssh/hostinger_deploy -P 65002 -r \
             dist/assets/. \
@@ -154,11 +155,15 @@ jobs:
           done
 
           scp -i ~/.ssh/hostinger_deploy -P 65002 \
+            dist/.htaccess \
+            "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/.htaccess.next"
+
+          scp -i ~/.ssh/hostinger_deploy -P 65002 \
             dist/index.html \
             "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/index.html.next"
 
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
-            "mv '$REMOTE_BASE/index.html.next' '$REMOTE_BASE/index.html'"
+            "mv '$REMOTE_BASE/.htaccess.next' '$REMOTE_BASE/.htaccess' && mv '$REMOTE_BASE/index.html.next' '$REMOTE_BASE/index.html'"
 
           printf '%s\n' "$GITHUB_SHA" | ssh -i ~/.ssh/hostinger_deploy -p 65002 \
             "$HOSTINGER_USER@$HOSTINGER_HOST" "cat > '$REMOTE_BASE/frontend-version.txt'"
@@ -186,12 +191,23 @@ jobs:
             SUPPORT_HEALTH="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/support_dashboard.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             STAFF_HEALTH="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/staff_auth.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             CLIENTS_HEALTH="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/staff_clients.php?health=$GITHUB_SHA" 2>/dev/null || true)"
+            INDEX_HTML="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/?sha=$GITHUB_SHA" 2>/dev/null || true)"
+            ASSETS_OK=1
+            while IFS= read -r asset; do
+              [[ -z "$asset" ]] && continue
+              if ! curl -fsSI "https://wifirapidito.com/$asset" >/dev/null 2>&1; then
+                echo "Missing public asset: $asset"
+                ASSETS_OK=0
+              fi
+            done < <(grep -oE 'assets/[^"''' ]+\.(js|css)' <<<"$INDEX_HTML" | sort -u)
+
             if [[ "$LIVE_SHA" == "$GITHUB_SHA" ]] \
               && grep -q '5.0-resilient' <<<"$LOGIN_HEALTH" \
               && grep -q '1.2-support-offset-pagination' <<<"$SUPPORT_HEALTH" \
               && grep -q '2.1-admin-reset' <<<"$STAFF_HEALTH" \
-              && grep -q '1.1-staff-clients-offset' <<<"$CLIENTS_HEALTH"; then
-              echo "Public Hostinger frontend and portal backend verified."
+              && grep -q '1.1-staff-clients-offset' <<<"$CLIENTS_HEALTH" \
+              && [[ "$ASSETS_OK" == 1 ]]; then
+              echo "Public Hostinger frontend, assets and portal backend verified."
               exit 0
             fi
             echo "Waiting for public deployment propagation ($attempt/12)..."
