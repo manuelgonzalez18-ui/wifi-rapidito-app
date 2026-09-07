@@ -16,9 +16,9 @@ const ValidatedPayments = () => {
             setLoading(true);
             setError('');
             try {
-                const response = await api.get('/payment_audit.php?limit=300', {
+                const response = await api.get('/payment_audit.php?limit=2000', {
                     withCredentials: true,
-                    timeout: 15000,
+                    timeout: 30000,
                     headers: { 'Cache-Control': 'no-cache' },
                 });
                 if (active) setPayments(Array.isArray(response?.data?.payments) ? response.data.payments : []);
@@ -44,6 +44,7 @@ const ValidatedPayments = () => {
             payment.service_id,
             payment.invoice_id,
             payment.reference,
+            payment.payment_id,
             payment.source,
             payment.payment_date,
             payment.method,
@@ -56,7 +57,7 @@ const ValidatedPayments = () => {
             <PageHeading
                 eyebrow="Finanzas"
                 title="Pagos validados"
-                description="Historial de pagos validados, incluyendo los registros disponibles en WispHub de los últimos 30 días y los nuevos pagos del portal y asistente virtual."
+                description="Todos los pagos registrados en WispHub durante los últimos 30 días, junto con el origen identificado de los pagos procesados por el portal y el asistente virtual."
                 action={(
                     <button type="button" onClick={() => setReloadKey((value) => value + 1)} className="secondary-action">
                         <RefreshCw size={16} /> Actualizar
@@ -66,7 +67,7 @@ const ValidatedPayments = () => {
 
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Surface className="p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Total validados</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Total · 30 días</p>
                     <p className="mt-2 text-2xl font-bold text-white">{payments.length}</p>
                 </Surface>
                 <Surface className="p-4">
@@ -90,13 +91,13 @@ const ValidatedPayments = () => {
                         type="search"
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}
-                        placeholder="Buscar cliente, factura, referencia o servicio"
+                        placeholder="Buscar por cliente, referencia, factura, servicio, ID de pago o fecha"
                         className="glass-input w-full rounded-xl py-2.5 pl-10 pr-4 text-sm"
                     />
                 </div>
             </Surface>
 
-            {loading ? <LoadingBlock label="Cargando pagos validados…" /> : null}
+            {loading ? <LoadingBlock label="Cargando pagos de los últimos 30 días…" /> : null}
 
             {!loading && error ? (
                 <EmptyState
@@ -110,12 +111,12 @@ const ValidatedPayments = () => {
             {!loading && !error ? (
                 <Surface className="overflow-hidden">
                     <div className="border-b border-white/8 p-4 sm:p-5">
-                        <h2 className="flex items-center gap-2 font-semibold text-white"><CreditCard size={18} className="text-emerald-300" /> Historial</h2>
+                        <h2 className="flex items-center gap-2 font-semibold text-white"><CreditCard size={18} className="text-emerald-300" /> Historial de los últimos 30 días</h2>
                         <p className="mt-1 text-xs text-slate-500">{filtered.length} registro{filtered.length === 1 ? '' : 's'} mostrado{filtered.length === 1 ? '' : 's'}</p>
                     </div>
 
                     {filtered.length === 0 ? (
-                        <div className="p-8 text-center text-sm text-slate-500">No hay pagos automáticos registrados todavía.</div>
+                        <div className="p-8 text-center text-sm text-slate-500">No se encontraron pagos registrados por WispHub en los últimos 30 días.</div>
                     ) : (
                         <div className="divide-y divide-white/6">
                             {filtered.map((payment) => {
@@ -123,11 +124,12 @@ const ValidatedPayments = () => {
                                 const historical = payment.source === 'wisphub_history';
                                 const SourceIcon = fromBot ? Smartphone : Globe2;
                                 const amount = Number(payment.amount);
+                                const reference = payment.reference || payment.payment_id || '—';
                                 return (
-                                    <div key={payment.id || `${payment.source}-${payment.invoice_id}-${payment.reference}`} className="grid gap-4 p-4 sm:grid-cols-[1.4fr_.7fr_.7fr_.8fr_auto] sm:items-center sm:px-5">
+                                    <div key={payment.id || `${payment.source}-${payment.invoice_id}-${reference}`} className="grid gap-4 p-4 sm:grid-cols-[1.4fr_.7fr_.7fr_.8fr_auto] sm:items-center sm:px-5">
                                         <div className="min-w-0">
                                             <p className="truncate font-semibold text-white">{payment.client_name || payment.username || 'Cliente'}</p>
-                                            <p className="mt-1 truncate text-xs text-slate-500">Factura #{payment.invoice_id || '—'} · Ref. {payment.reference || '—'}{payment.service_id ? ` · Servicio #${payment.service_id}` : ''}</p>
+                                            <p className="mt-1 truncate text-xs text-slate-500">Factura #{payment.invoice_id || '—'} · Ref. {reference}{payment.service_id ? ` · Servicio #${payment.service_id}` : ''}</p>
                                         </div>
                                         <div>
                                             <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600">Monto</p>
@@ -139,9 +141,9 @@ const ValidatedPayments = () => {
                                         </div>
                                         <div className="flex items-center gap-2 text-sm text-slate-300">
                                             <SourceIcon size={16} className={fromBot ? 'text-violet-300' : 'text-cyan-300'} />
-                                            {historical ? 'WispHub (últimos 30 días)' : (fromBot ? 'Asistente virtual' : 'Portal')}
+                                            {historical ? 'WispHub' : (fromBot ? 'Asistente virtual' : 'Portal')}
                                         </div>
-                                        <StatusPill tone="success">Validado</StatusPill>
+                                        <StatusPill tone="success">Registrado</StatusPill>
                                     </div>
                                 );
                             })}
