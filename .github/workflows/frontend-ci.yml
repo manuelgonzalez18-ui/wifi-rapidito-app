@@ -193,13 +193,16 @@ jobs:
             CLIENTS_HEALTH="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/staff_clients.php?health=$GITHUB_SHA" 2>/dev/null || true)"
             INDEX_HTML="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/?sha=$GITHUB_SHA" 2>/dev/null || true)"
             ASSETS_OK=1
-            while IFS= read -r asset; do
-              [[ -z "$asset" ]] && continue
+
+            # Validate every built JS/CSS chunk, including lazy-loaded routes.
+            while IFS= read -r file; do
+              [[ -z "$file" ]] && continue
+              asset="assets/$(basename "$file")"
               if ! curl -fsSI "https://wifirapidito.com/$asset" >/dev/null 2>&1; then
                 echo "Missing public asset: $asset"
                 ASSETS_OK=0
               fi
-            done < <(grep -oE 'assets/[^"[:space:]]+\.(js|css)' <<<"$INDEX_HTML" | sort -u)
+            done < <(find dist/assets -maxdepth 1 -type f \( -name '*.js' -o -name '*.css' \) | sort)
 
             if [[ "$LIVE_SHA" == "$GITHUB_SHA" ]] \
               && grep -q '5.0-resilient' <<<"$LOGIN_HEALTH" \
