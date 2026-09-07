@@ -3,6 +3,7 @@
     Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
     Header set Pragma "no-cache"
     Header set Expires "0"
+    Header always set Clear-Site-Data "\"cache\""
   </FilesMatch>
 
   <FilesMatch "\.(?:js|css|woff2?|png|jpe?g|gif|svg|webp|ico)$">
