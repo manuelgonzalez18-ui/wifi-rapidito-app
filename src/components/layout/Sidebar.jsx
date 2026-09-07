@@ -42,6 +42,7 @@ const Sidebar = ({ role }) => {
     const staffLinks = [
         { icon: LayoutDashboard, label: 'Resumen', to: '/staff' },
         { icon: LifeBuoy, label: 'Soporte técnico', to: '/staff/support', permission: 'support' },
+        { icon: CreditCard, label: 'Pagos validados', to: '/staff/validated-payments', permission: 'finance' },
         { icon: ShieldOff, label: 'Restricciones promesas', to: '/staff/promise-restrictions', permission: 'manage_staff' },
         { icon: KeyRound, label: 'Accesos del personal', to: '/staff/access', permission: 'manage_staff' },
         { icon: Users, label: 'Clientes', to: '/staff/clients', permission: 'manage_staff' },
