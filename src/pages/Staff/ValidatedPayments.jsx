@@ -57,7 +57,7 @@ const ValidatedPayments = () => {
             <PageHeading
                 eyebrow="Finanzas"
                 title="Pagos validados"
-                description="Todos los pagos registrados en WispHub durante los últimos 30 días, junto con el origen identificado de los pagos procesados por el portal y el asistente virtual."
+                description="Resultados de los últimos 30 días: pagos registrados por el Portal de Autogestión, el Asistente Virtual Rapidito y los pagos disponibles en WispHub."
                 action={(
                     <button type="button" onClick={() => setReloadKey((value) => value + 1)} className="secondary-action">
                         <RefreshCw size={16} /> Actualizar
@@ -71,11 +71,11 @@ const ValidatedPayments = () => {
                     <p className="mt-2 text-2xl font-bold text-white">{payments.length}</p>
                 </Surface>
                 <Surface className="p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Portal</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Portal · 30 días</p>
                     <p className="mt-2 text-2xl font-bold text-cyan-300">{payments.filter((item) => item.source === 'portal').length}</p>
                 </Surface>
                 <Surface className="p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Asistente virtual</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Asistente virtual · 30 días</p>
                     <p className="mt-2 text-2xl font-bold text-violet-300">{payments.filter((item) => item.source === 'whatsapp_bot').length}</p>
                 </Surface>
                 <Surface className="p-4">
@@ -116,7 +116,7 @@ const ValidatedPayments = () => {
                     </div>
 
                     {filtered.length === 0 ? (
-                        <div className="p-8 text-center text-sm text-slate-500">No se encontraron pagos registrados por WispHub en los últimos 30 días.</div>
+                        <div className="p-8 text-center text-sm text-slate-500">No se encontraron pagos registrados en los últimos 30 días.</div>
                     ) : (
                         <div className="divide-y divide-white/6">
                             {filtered.map((payment) => {
