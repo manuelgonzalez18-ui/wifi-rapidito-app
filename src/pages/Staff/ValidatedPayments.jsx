@@ -46,6 +46,8 @@ const ValidatedPayments = () => {
             payment.reference,
             payment.source,
             payment.payment_date,
+            payment.method,
+            payment.created_at,
         ].filter(Boolean).some((value) => String(value).toLowerCase().includes(needle)));
     }, [payments, query]);
 
@@ -114,6 +116,7 @@ const ValidatedPayments = () => {
                         <div className="divide-y divide-white/6">
                             {filtered.map((payment) => {
                                 const fromBot = payment.source === 'whatsapp_bot';
+                                const historical = payment.source === 'wisphub_history';
                                 const SourceIcon = fromBot ? Smartphone : Globe2;
                                 const amount = Number(payment.amount);
                                 return (
@@ -132,7 +135,7 @@ const ValidatedPayments = () => {
                                         </div>
                                         <div className="flex items-center gap-2 text-sm text-slate-300">
                                             <SourceIcon size={16} className={fromBot ? 'text-violet-300' : 'text-cyan-300'} />
-                                            {fromBot ? 'Asistente virtual' : 'Portal'}
+                                            {historical ? 'WispHub (última semana)' : (fromBot ? 'Asistente virtual' : 'Portal')}
                                         </div>
                                         <StatusPill tone="success">Validado</StatusPill>
                                     </div>
