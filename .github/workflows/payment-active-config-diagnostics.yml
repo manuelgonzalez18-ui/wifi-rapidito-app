@@ -1,5 +1,6 @@
 name: Payment Active Config Diagnostics
 
+# Re-run 2026-09-12 after portal and bot payment validation reports.
 on:
   push:
     branches: [reconstruccion-bot-10-opciones]
