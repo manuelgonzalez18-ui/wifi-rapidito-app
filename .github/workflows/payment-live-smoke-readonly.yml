@@ -1,0 +1,98 @@
+name: Payment Live Smoke Readonly
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/payment-live-smoke-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          for attempt in {1..5}; do
+            if ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then break; fi
+            sleep $((attempt * 3))
+          done
+
+      - name: Run non-mutating payment diagnostics
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 -o BatchMode=yes -o ConnectTimeout=20 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          ROOT="$HOME/domains/wifirapidito.com"
+          test -s "$BASE/banesco_api.php"
+          test -s "$BASE/proxy_payments.php"
+
+          echo '=== payment runtime files ==='
+          php -l "$BASE/banesco_api.php" >/dev/null && echo 'BANESCO_PHP_SYNTAX=OK'
+          php -l "$BASE/proxy_payments.php" >/dev/null && echo 'PROXY_PHP_SYNTAX=OK'
+          if [ -s "$ROOT/.wifi-rapidito-private/payment_secrets.php" ]; then
+            echo 'BANESCO_PRIVATE_CONFIG=PRESENT'
+          else
+            echo 'BANESCO_PRIVATE_CONFIG=MISSING'
+          fi
+
+          cat >/tmp/rapidito_payment_smoke.php <<'PHP'
+          <?php
+          try {
+              require $argv[1];
+              echo 'BANESCO_ADAPTER_LOAD=OK' . PHP_EOL;
+              echo 'BANESCO_CLIENT_ID_CONFIGURED=' . ((defined('BANESCO_CLIENT_ID') && strlen((string)BANESCO_CLIENT_ID) > 0) ? 'YES' : 'NO') . PHP_EOL;
+              echo 'BANESCO_CLIENT_SECRET_CONFIGURED=' . ((defined('BANESCO_CLIENT_SECRET') && strlen((string)BANESCO_CLIENT_SECRET) > 0) ? 'YES' : 'NO') . PHP_EOL;
+              $r = BanescoAPI::checkTransaction('12346022338', 'J003075523');
+              echo 'BANESCO_QA_SMOKE_SUCCESS=' . (!empty($r['success']) ? 'YES' : 'NO') . PHP_EOL;
+              if (empty($r['success'])) {
+                  $msg = preg_replace('/[^A-Za-z0-9 _.,:()\-áéíóúÁÉÍÓÚñÑ]/u', '', (string)($r['message'] ?? 'sin mensaje'));
+                  echo 'BANESCO_QA_SMOKE_MESSAGE=' . substr($msg, 0, 180) . PHP_EOL;
+              }
+          } catch (Throwable $e) {
+              $msg = preg_replace('/[^A-Za-z0-9 _.,:()\-áéíóúÁÉÍÓÚñÑ]/u', '', $e->getMessage());
+              echo 'BANESCO_SMOKE_EXCEPTION=' . substr($msg, 0, 220) . PHP_EOL;
+              exit(2);
+          }
+          PHP
+          php /tmp/rapidito_payment_smoke.php "$BASE/banesco_api.php"
+          rm -f /tmp/rapidito_payment_smoke.php
+
+          echo '=== public endpoint ==='
+          code=$(curl -sS --max-time 20 -o /tmp/proxy_get.txt -w '%{http_code}' https://wifirapidito.com/proxy_payments.php || true)
+          echo "PROXY_GET_HTTP=$code"
+          if grep -q 'Método no permitido' /tmp/proxy_get.txt 2>/dev/null; then echo 'PROXY_EXECUTES=YES'; else echo 'PROXY_EXECUTES=UNKNOWN'; fi
+
+          echo '=== recent sanitized payment errors ==='
+          total=0
+          for log in "$ROOT/logs"/* "$BASE/error_log"; do
+            [ -f "$log" ] || continue
+            count=$(tail -n 10000 "$log" 2>/dev/null | grep -Eci 'Credenciales Banesco no configuradas|Error obteniendo token Banesco|Respuesta inválida de API Banesco|Error cURL Banesco API|proxy_payments.php.*( 4[0-9][0-9] | 5[0-9][0-9] )' || true)
+            if [ "$count" -gt 0 ]; then
+              echo "PAYMENT_ERROR_COUNT_$(basename "$log" | tr -cd 'A-Za-z0-9_.-')=$count"
+              total=$((total + count))
+            fi
+          done
+          echo "PAYMENT_ERROR_TOTAL=$total"
+          REMOTE
