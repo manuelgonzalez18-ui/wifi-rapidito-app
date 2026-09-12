@@ -1,5 +1,6 @@
 name: Payment Validation Diagnostics
 
+# Re-run 2026-09-12 to investigate portal and WhatsApp validation failures.
 on:
   push:
     branches: [reconstruccion-bot-10-opciones]
