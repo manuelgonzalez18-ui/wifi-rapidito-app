@@ -1,4 +1,5 @@
 name: Payment Proxy Hotfix Deploy
+# Targeted production hotfix: deploy proxy only; keep live Banesco adapter unchanged.
 
 on:
   push:
