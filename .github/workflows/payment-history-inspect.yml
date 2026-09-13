@@ -1,0 +1,70 @@
+name: Payment History Inspect
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/payment-history-inspect.yml'
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Inspect payment stores and WispHub schema
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          PRIVATE="$HOME/domains/wifirapidito.com/.wifi-rapidito-private"
+          if [[ ! -d "$PRIVATE" ]]; then PRIVATE="$HOME/domains/wifirapidito.com/public_html/../.wifi-rapidito-private"; fi
+          echo "BASE_OK=$([[ -d "$BASE" ]] && echo 1 || echo 0)"
+          php -r '
+            $base=getenv("HOME")."/domains/wifirapidito.com/public_html";
+            $private=dirname($base)."/.wifi-rapidito-private";
+            $registry=$private."/validated-payments.json";
+            $audit=$private."/payment-audit.jsonl";
+            $validated=0; $sources=[];
+            if (is_file($registry)) {
+              $rows=json_decode(file_get_contents($registry), true);
+              if (is_array($rows)) foreach ($rows as $row) if (is_array($row) && ($row["status"]??"")==="validated") { $validated++; $src=$row["source"]??"unknown"; $sources[$src]=($sources[$src]??0)+1; }
+            }
+            echo "REGISTRY_EXISTS=".(is_file($registry)?"1":"0").PHP_EOL;
+            echo "REGISTRY_VALIDATED_COUNT=".$validated.PHP_EOL;
+            echo "REGISTRY_SOURCES=".json_encode($sources).PHP_EOL;
+            echo "LEGACY_AUDIT_EXISTS=".(is_file($audit)?"1":"0").PHP_EOL;
+            require $base."/config_wisphub.php";
+            $url=rtrim(WISPHUB_API_URL,"/")."/pagos/?limit=5";
+            $ch=curl_init($url);
+            curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"],CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);
+            $body=curl_exec($ch); $code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE); curl_close($ch);
+            echo "WISPHUB_PAGOS_HTTP=".$code.PHP_EOL;
+            $data=json_decode((string)$body,true);
+            $rows=is_array($data["results"]??null)?$data["results"]:(is_array($data)&&array_is_list($data)?$data:[]);
+            echo "WISPHUB_PAGE_COUNT=".count($rows).PHP_EOL;
+            if ($rows && is_array($rows[0])) { $keys=array_keys($rows[0]); sort($keys); echo "WISPHUB_ROW_KEYS=".implode(",",$keys).PHP_EOL; }
+          '
+          REMOTE
