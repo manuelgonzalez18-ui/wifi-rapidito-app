@@ -84,20 +84,20 @@ jobs:
             echo "EVOLUTION_INSTANCES_HTTP=$status"
             if [[ "$status" == "200" ]]; then
               python3 - <<'PY'
-import json
-try:
-    data=json.load(open('/tmp/evo_instances.json'))
-except Exception:
-    print('EVOLUTION_JSON=INVALID')
-    raise SystemExit
-items=data if isinstance(data,list) else data.get('instances',[]) if isinstance(data,dict) else []
-print('EVOLUTION_INSTANCE_COUNT='+str(len(items)))
-for item in items:
-    name=item.get('instanceName') or item.get('name') or item.get('instance',{}).get('instanceName') if isinstance(item,dict) else None
-    state=item.get('connectionStatus') or item.get('state') or item.get('instance',{}).get('state') if isinstance(item,dict) else None
-    if name:
-        print(f'EVOLUTION_INSTANCE={name} STATE={state}')
-PY
+          import json
+          try:
+              data=json.load(open('/tmp/evo_instances.json'))
+          except Exception:
+              print('EVOLUTION_JSON=INVALID')
+              raise SystemExit
+          items=data if isinstance(data,list) else data.get('instances',[]) if isinstance(data,dict) else []
+          print('EVOLUTION_INSTANCE_COUNT='+str(len(items)))
+          for item in items:
+              name=item.get('instanceName') or item.get('name') or item.get('instance',{}).get('instanceName') if isinstance(item,dict) else None
+              state=item.get('connectionStatus') or item.get('state') or item.get('instance',{}).get('state') if isinstance(item,dict) else None
+              if name:
+                  print(f'EVOLUTION_INSTANCE={name} STATE={state}')
+          PY
             fi
           fi
           REMOTE
