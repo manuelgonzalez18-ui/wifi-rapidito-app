@@ -1,4 +1,5 @@
 name: Payment Live Smoke Readonly
+# Re-run production read-only smoke after Banesco payload contract hotfix.
 
 on:
   push:
