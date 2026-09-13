@@ -79,24 +79,24 @@ jobs:
             echo "EVOLUTION_INSTANCES_HTTP=$code"
             if [[ "$code" == "200" ]]; then
               python3 - <<'PY'
-import json
-p='/tmp/rapidito_instances.json'
-try:
-    data=json.load(open(p))
-except Exception:
-    print('EVOLUTION_JSON=INVALID')
-    raise SystemExit
-items=data if isinstance(data,list) else data.get('instances',[]) if isinstance(data,dict) else []
-print('EVOLUTION_INSTANCE_COUNT='+str(len(items)))
-for item in items:
-    if not isinstance(item,dict):
-        continue
-    nested=item.get('instance') if isinstance(item.get('instance'),dict) else {}
-    name=item.get('instanceName') or item.get('name') or nested.get('instanceName')
-    state=item.get('connectionStatus') or item.get('state') or nested.get('state') or nested.get('status')
-    if name:
-        print(f'EVOLUTION_INSTANCE={name} STATE={state}')
-PY
+          import json
+          p='/tmp/rapidito_instances.json'
+          try:
+              data=json.load(open(p))
+          except Exception:
+              print('EVOLUTION_JSON=INVALID')
+              raise SystemExit
+          items=data if isinstance(data,list) else data.get('instances',[]) if isinstance(data,dict) else []
+          print('EVOLUTION_INSTANCE_COUNT='+str(len(items)))
+          for item in items:
+              if not isinstance(item,dict):
+                  continue
+              nested=item.get('instance') if isinstance(item.get('instance'),dict) else {}
+              name=item.get('instanceName') or item.get('name') or nested.get('instanceName')
+              state=item.get('connectionStatus') or item.get('state') or nested.get('state') or nested.get('status')
+              if name:
+                  print(f'EVOLUTION_INSTANCE={name} STATE={state}')
+          PY
             fi
           fi
           REMOTE
