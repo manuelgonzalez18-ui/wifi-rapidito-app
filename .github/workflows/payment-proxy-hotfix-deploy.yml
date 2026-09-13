@@ -1,0 +1,128 @@
+name: Payment Proxy Hotfix Deploy
+
+on:
+  push:
+    branches: [reconstruccion-bot-10-opciones]
+    paths:
+      - '.github/workflows/payment-proxy-hotfix-deploy.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: payment-proxy-hotfix-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate repository proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l public/proxy_payments.php
+          grep -Fq 'BanescoAPI::checkTransaction($reference, $banescoOptions)' public/proxy_payments.php
+          grep -Fq 'function payment_banesco_options' public/proxy_payments.php
+
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
+          chmod 600 ~/.ssh/hostinger_deploy
+          ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
+          : > ~/.ssh/known_hosts
+          for attempt in 1 2 3 4 5; do
+            if ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then break; fi
+            sleep 2
+          done
+          test -s ~/.ssh/known_hosts
+
+      - name: Backup and deploy proxy atomically
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
+          stamp="$(date +%Y%m%d-%H%M%S)"
+
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" "set -euo pipefail; mkdir -p '$REMOTE_BASE/.portal-backups'; cp '$REMOTE_BASE/proxy_payments.php' '$REMOTE_BASE/.portal-backups/proxy_payments-before-banesco-hotfix-$stamp.php'"
+
+          scp -i ~/.ssh/hostinger_deploy -P 65002 public/proxy_payments.php "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/proxy_payments.php.next"
+
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" "set -euo pipefail; php -l '$REMOTE_BASE/proxy_payments.php.next' >/dev/null; mv '$REMOTE_BASE/proxy_payments.php.next' '$REMOTE_BASE/proxy_payments.php'; php -l '$REMOTE_BASE/proxy_payments.php' >/dev/null"
+
+      - name: Verify live contract and Banesco readonly query
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          PROXY="$BASE/proxy_payments.php"
+          ADAPTER="$BASE/banesco_api.php"
+
+          grep -Fq 'BanescoAPI::checkTransaction($reference, $banescoOptions)' "$PROXY"
+          grep -Fq 'function payment_banesco_options' "$PROXY"
+          grep -Fq 'public static function checkTransaction($referenceNumber, $options = [])' "$ADAPTER"
+          echo 'LIVE_PROXY_CONTRACT=OK'
+
+          cat >/tmp/rapidito_banesco_readonly.php <<'PHP'
+          <?php
+          try {
+              require $argv[1];
+              $result = BanescoAPI::checkTransaction('12346022338', [
+                  'amount' => 1.00,
+                  'paymentDate' => date('Y-m-d'),
+                  'payment_date' => date('Y-m-d'),
+                  'bankId' => '0134',
+                  'banco_origen' => '0134',
+              ]);
+              echo 'BANESCO_READONLY_CALL=OK' . PHP_EOL;
+              echo 'BANESCO_READONLY_SUCCESS=' . (!empty($result['success']) ? 'YES' : 'NO') . PHP_EOL;
+              if (empty($result['success'])) {
+                  $message = preg_replace('/[^A-Za-z0-9 _.,:()\-áéíóúÁÉÍÓÚñÑ]/u', '', (string)($result['message'] ?? 'sin mensaje'));
+                  echo 'BANESCO_READONLY_MESSAGE=' . substr($message, 0, 180) . PHP_EOL;
+              }
+          } catch (Throwable $e) {
+              $message = preg_replace('/[^A-Za-z0-9 _.,:()\-áéíóúÁÉÍÓÚñÑ]/u', '', $e->getMessage());
+              echo 'BANESCO_READONLY_EXCEPTION=' . substr($message, 0, 220) . PHP_EOL;
+              exit(30);
+          }
+          PHP
+          php /tmp/rapidito_banesco_readonly.php "$ADAPTER"
+          rm -f /tmp/rapidito_banesco_readonly.php
+          REMOTE
+
+      - name: Verify public health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..8}; do
+            body="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/proxy_payments.php?health=$GITHUB_SHA" 2>/dev/null || true)"
+            if grep -q '4.2-wisphub-datetime-errors' <<<"$body"; then
+              echo 'PUBLIC_PROXY_HEALTH=OK'
+              exit 0
+            fi
+            sleep 3
+          done
+          echo 'Public payment proxy health did not expose expected version.'
+          exit 40
