@@ -5,6 +5,7 @@ on:
     branches: [reconstruccion-bot-10-opciones]
     paths:
       - '.github/workflows/payment-postfix-readonly.yml'
+      - 'public/banesco_api.php'
 
 permissions:
   contents: read
@@ -14,6 +15,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate reconstructed adapter locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l public/banesco_api.php
+          grep -Fq 'public static function checkTransaction($referenceNumber, $options = [])' public/banesco_api.php
+          grep -Fq "'grant_type' => 'password'" public/banesco_api.php
+          grep -Fq "'scope' => 'CONSULTA DE TRANSACCIONES'" public/banesco_api.php
+          grep -Fq "BANESCO_ENV === 'PROD'" public/banesco_api.php
+          if grep -Eq "define\('BANESCO_CLIENT_(ID|SECRET)_(QA|PROD)'" public/banesco_api.php; then
+            echo 'Hard-coded environment credentials detected in repository adapter.'
+            exit 22
+          fi
+          echo 'REPOSITORY_ADAPTER_CONTRACT=OK'
+          echo 'REPOSITORY_ADAPTER_NO_LITERAL_ENV_CREDENTIALS=OK'
+
       - name: Configure Hostinger SSH
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
@@ -31,7 +51,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
           ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
 
-      - name: Inspect redacted live token flow without changes
+      - name: Confirm live adapter remains unchanged and compatible
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -40,10 +60,15 @@ jobs:
           set -euo pipefail
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
-          ADAPTER="$HOME/domains/wifirapidito.com/public_html/banesco_api.php"
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          ADAPTER="$BASE/banesco_api.php"
+          PROXY="$BASE/proxy_payments.php"
           test -s "$ADAPTER"
+          test -s "$PROXY"
           php -l "$ADAPTER" >/dev/null
-          sed -n '37,95p' "$ADAPTER" \
-            | sed -E 's/[A-Fa-f0-9]{16,}/REDACTED/g' \
-            | sed -E "s/((password|username|client_secret|client_id)[^=]*=>[[:space:]]*)'[^']*'/\1'REDACTED'/Ig"
+          php -l "$PROXY" >/dev/null
+          grep -Fq 'public static function checkTransaction($referenceNumber, $options = [])' "$ADAPTER"
+          grep -Fq 'BanescoAPI::checkTransaction($reference, $banescoOptions)' "$PROXY"
+          grep -Fq 'function payment_banesco_options' "$PROXY"
+          echo 'LIVE_ADAPTER_PROXY_CONTRACT=OK'
           REMOTE
