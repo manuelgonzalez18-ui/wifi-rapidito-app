@@ -60,6 +60,16 @@ jobs:
           done
           if grep -q "\$bankId = '0134'" "$PROXY"; then echo 'same_bank_default_0134=yes'; else echo 'same_bank_default_0134=no'; fi
 
+          echo '=== Live Banesco adapter ==='
+          php -l "$ADAPTER" >/dev/null
+          sha256sum "$ADAPTER" | awk '{print "banesco_sha256=" $1}'
+          if grep -Fq 'is_array($customerIdR)' "$ADAPTER"; then
+            echo 'banesco_array_compat=yes'
+          else
+            echo 'banesco_array_compat=no'
+            exit 21
+          fi
+
           echo '=== Live Banesco environment ==='
           php -r 'require $argv[1]; echo "banesco_env=" . (defined("BANESCO_ENV") ? BANESCO_ENV : "undefined") . "\n";' "$ADAPTER"
 
