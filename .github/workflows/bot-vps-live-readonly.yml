@@ -42,67 +42,48 @@ jobs:
           test "$actual_fp" = "$EXPECTED_HOST_FP"
           ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'echo VPS_CONNECTION_OK'
 
-      - name: Inspect production without changes
+      - name: Inspect active bot and payment flow without changes
         shell: bash
         run: |
           set -euo pipefail
-          SSH=(ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 "$TARGET_USER@$TARGET_HOST")
-          "${SSH[@]}" "APP='$APP' bash -s" <<'REMOTE'
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" "APP='$APP' bash -s" <<'REMOTE'
           set -euo pipefail
-          test -d "$APP"
           cd "$APP"
           echo "HOST=$(hostname)"
           echo "USER=$(whoami)"
-          echo "APP_PRESENT=1"
-          test -f docker-compose.yml
-          test -f .env
-          test -f bot_logic.py
-          test -f bot_entry.py
-          echo "COMPOSE_PRESENT=1"
-          echo "ENV_PRESENT=1"
-          echo "BOT_LOGIC_PRESENT=1"
-          echo "BOT_ENTRY_PRESENT=1"
-          docker --version
-          docker compose version
-          docker compose ps
-          echo "--- containers ---"
-          docker ps --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}}'
-          echo "--- local health ---"
-          curl -fsS --max-time 5 http://127.0.0.1:5000/webhook || true
-          echo
-          echo "--- evolution health ---"
-          curl -fsS --max-time 5 http://127.0.0.1:8080/ || true
-          echo
-          echo "--- safe env flags ---"
-          set -a
-          source .env
-          set +a
-          for v in EVO_API_KEY WISPHUB_API_KEY; do
-            if [[ -n "${!v:-}" ]]; then echo "$v=SET"; else echo "$v=MISSING"; fi
+
+          for c in bot_backend evolution_api redis_bot; do
+            running=$(docker inspect -f '{{.State.Running}}' "$c")
+            image=$(docker inspect -f '{{.Config.Image}}' "$c")
+            echo "CONTAINER=$c RUNNING=$running IMAGE=$image"
+            test "$running" = true
           done
-          echo "INSTANCE_NAME=${INSTANCE_NAME:-rapidito_bot}"
-          if [[ -n "${EVO_API_KEY:-}" ]]; then
-            status=$(curl -sS --max-time 8 -o /tmp/evo_instances.json -w '%{http_code}' -H "apikey: $EVO_API_KEY" http://127.0.0.1:8080/instance/fetchInstances || true)
-            echo "EVOLUTION_INSTANCES_HTTP=$status"
-            if [[ "$status" == "200" ]]; then
-              python3 - <<'PY'
-          import json
-          try:
-              data=json.load(open('/tmp/evo_instances.json'))
-          except Exception:
-              print('EVOLUTION_JSON=INVALID')
-              raise SystemExit
-          items=data if isinstance(data,list) else data.get('instances',[]) if isinstance(data,dict) else []
-          print('EVOLUTION_INSTANCE_COUNT='+str(len(items)))
-          for item in items:
-              if not isinstance(item,dict):
-                  continue
-              nested=item.get('instance') if isinstance(item.get('instance'),dict) else {}
-              name=item.get('instanceName') or item.get('name') or nested.get('instanceName')
-              state=item.get('connectionStatus') or item.get('state') or nested.get('state') or nested.get('status')
-              if name:
-                  print(f'EVOLUTION_INSTANCE={name} STATE={state}')
-          PY
-            fi
-          fi
+
+          health=$(curl -fsS --max-time 8 http://127.0.0.1:5000/webhook)
+          printf '%s\n' "$health"
+          grep -q '"status":"ok"' <<<"$health"
+          grep -q '4.0-bot-10-opciones' <<<"$health"
+          echo 'BOT_HEALTH_OK=1'
+
+          docker exec bot_backend python -m py_compile /app/bot_logic.py /app/bot_entry.py
+          docker exec bot_backend grep -Fq 'PAYMENT_PROXY_URL' /app/bot_logic.py
+          docker exec bot_backend grep -Fq 'response = await client.post(PAYMENT_PROXY_URL, data=form)' /app/bot_logic.py
+          docker exec bot_backend grep -Fq 'ok, result = await bot.register_verified_payment' /app/bot_entry.py
+          docker exec bot_backend grep -Fq 'await record_payment_audit' /app/bot_entry.py
+          docker exec bot_backend grep -Fq '"source": "whatsapp_bot"' /app/bot_entry.py
+          docker exec bot_backend grep -Fq 'https://wifirapidito.com/payment_audit.php' /app/bot_entry.py
+          echo 'ACTIVE_PAYMENT_FLOW_CODE_OK=1'
+
+          proxy_health=$(curl -fsS --max-time 12 'https://wifirapidito.com/proxy_payments.php?health=vps-readonly')
+          printf '%s\n' "$proxy_health"
+          grep -q '4.2-wisphub-datetime-errors' <<<"$proxy_health"
+          echo 'PAYMENT_PROXY_PUBLIC_OK=1'
+
+          audit_code=$(curl -sS --max-time 12 -o /tmp/payment_audit_get.txt -w '%{http_code}' 'https://wifirapidito.com/payment_audit.php?health=vps-readonly' || true)
+          echo "PAYMENT_AUDIT_GET_HTTP=$audit_code"
+
+          docker exec bot_backend sh -lc 'test -n "$WISPHUB_API_KEY" && echo WISPHUB_API_KEY=SET || echo WISPHUB_API_KEY=MISSING'
+          docker exec bot_backend sh -lc 'if test -n "$META_ACCESS_TOKEN"; then echo WHATSAPP_PROVIDER_META=CONFIGURED; elif test -n "$EVO_API_KEY"; then echo WHATSAPP_PROVIDER_EVOLUTION=CONFIGURED; else echo WHATSAPP_PROVIDER=MISSING; fi'
+
+          echo 'READONLY_INSPECTION_COMPLETE=1'
           REMOTE
