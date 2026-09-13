@@ -48,6 +48,15 @@ class BanescoAPI {
     }
 
     public static function checkTransaction($paymentId, $customerIdR = 'J402638850') {
+        // Compatibilidad con el proxy unificado: versiones recientes envían
+        // un arreglo de opciones como segundo argumento. La API de Banesco
+        // espera que customerIdR sea una cadena, nunca un objeto JSON.
+        if (is_array($customerIdR)) {
+            $customerIdR = $customerIdR['customerIdR'] ?? 'J402638850';
+        }
+        $customerIdR = trim((string) $customerIdR);
+        if ($customerIdR === '') $customerIdR = 'J402638850';
+
         $token = self::getToken();
         $url = BANESCO_API_QA . '/financial-account/transactions';
         $payload = ['dataRequest'=>['device'=>['description'=>'Wifi Rapidito Portal','ipAddress'=>$_SERVER['REMOTE_ADDR'] ?? '127.0.0.1','type'=>'Web'],'transaction'=>['customerIdR'=>$customerIdR,'paymentId'=>(string)$paymentId]]];
