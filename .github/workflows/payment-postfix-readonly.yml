@@ -31,7 +31,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
           ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
 
-      - name: Inspect exact live payment contract without changes
+      - name: Inspect live Banesco validation implementation without changes
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -40,32 +40,9 @@ jobs:
           set -euo pipefail
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
-          BASE="$HOME/domains/wifirapidito.com/public_html"
-          PROXY="$BASE/proxy_payments.php"
-          ADAPTER="$BASE/banesco_api.php"
-          test -s "$PROXY"
+          ADAPTER="$HOME/domains/wifirapidito.com/public_html/banesco_api.php"
           test -s "$ADAPTER"
-
-          echo '=== Live files ==='
-          php -l "$PROXY" >/dev/null && echo 'proxy_syntax=ok'
-          php -l "$ADAPTER" >/dev/null && echo 'adapter_syntax=ok'
-          sha256sum "$PROXY" | awk '{print "proxy_sha256=" $1}'
-          sha256sum "$ADAPTER" | awk '{print "banesco_sha256=" $1}'
-
-          echo '=== Live proxy Banesco call ==='
-          grep -n 'BanescoAPI::checkTransaction' "$PROXY" | sed -E 's/[[:space:]]+/ /g' || true
-          grep -Fq 'BanescoAPI::checkTransaction($reference, $banescoOptions)' "$PROXY" && echo 'two_argument_call=yes' || echo 'two_argument_call=no'
-          grep -Eq 'BanescoAPI::checkTransaction\([^,;]+\);' "$PROXY" && echo 'one_argument_call=yes' || echo 'one_argument_call=no'
-          grep -Fq 'payment_banesco_options' "$PROXY" && echo 'banesco_options_builder=yes' || echo 'banesco_options_builder=no'
-          grep -Fq "version' => '4.2-wisphub-datetime-errors'" "$PROXY" && echo 'proxy_version_4_2=yes' || echo 'proxy_version_4_2=no'
-
-          echo '=== Live adapter compatibility ==='
-          grep -n 'function checkTransaction' "$ADAPTER" | sed -E 's/[[:space:]]+/ /g' || true
-          grep -Fq 'is_array($customerIdR)' "$ADAPTER" && echo 'banesco_array_compat=yes' || echo 'banesco_array_compat=no'
-          grep -Fq "J402638850" "$ADAPTER" && echo 'default_customer_id_present=yes' || echo 'default_customer_id_present=no'
-
-          echo '=== Public health ==='
-          code=$(curl -sS --max-time 15 -o /tmp/payment_health.txt -w '%{http_code}' "https://wifirapidito.com/proxy_payments.php?health=contract" || true)
-          echo "health_http=$code"
-          head -c 300 /tmp/payment_health.txt 2>/dev/null | tr '\n' ' '; echo
+          php -l "$ADAPTER" >/dev/null
+          echo '=== adapter validation section ==='
+          sed -n '80,240p' "$ADAPTER"
           REMOTE
