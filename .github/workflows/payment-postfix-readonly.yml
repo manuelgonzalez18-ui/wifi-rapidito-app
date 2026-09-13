@@ -31,7 +31,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
           ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
 
-      - name: Inspect redacted live adapter header without changes
+      - name: Inspect redacted live token flow without changes
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -43,8 +43,7 @@ jobs:
           ADAPTER="$HOME/domains/wifirapidito.com/public_html/banesco_api.php"
           test -s "$ADAPTER"
           php -l "$ADAPTER" >/dev/null
-          sed -n '1,36p' "$ADAPTER" \
-            | sed -E "s/(define\('BANESCO_CLIENT_ID',[[:space:]]*)[^;]+;/\1'REDACTED');/" \
-            | sed -E "s/(define\('BANESCO_CLIENT_SECRET',[[:space:]]*)[^;]+;/\1'REDACTED');/" \
-            | sed -E 's/[A-Fa-f0-9]{24,}/REDACTED/g'
+          sed -n '37,95p' "$ADAPTER" \
+            | sed -E 's/[A-Fa-f0-9]{16,}/REDACTED/g' \
+            | sed -E "s/((password|username|client_secret|client_id)[^=]*=>[[:space:]]*)'[^']*'/\1'REDACTED'/Ig"
           REMOTE
