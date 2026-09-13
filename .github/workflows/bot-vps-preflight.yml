@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/bot-vps-preflight.yml'
       - 'vps/LIVE_PREFLIGHT_TRIGGER'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,39 +15,38 @@ jobs:
   preflight-vps:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      TARGET_HOST: 76.13.100.2
+      SSH_PORT: '22'
+      TARGET_USER: root
+      EXPECTED_HOST_FP: SHA256:bO3AdnzChlN7ZSaozrNfs3C0wLT6cvMyI4Jg1D78qYQ
+      BOT_DIR: /home/bot.local/public_html
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure SSH key
+      - name: Configure verified VPS SSH
         env:
-          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
-          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
-          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
-          BOT_VPS_SSH_KEY: ${{ secrets.BOT_VPS_SSH_KEY }}
+          BOT_VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$BOT_VPS_HOST"
-          test -n "$BOT_VPS_PORT"
-          test -n "$BOT_VPS_USER"
-          test -n "$BOT_VPS_SSH_KEY"
+          test -n "$BOT_VPS_SSH_KEY_B64"
           mkdir -p ~/.ssh
-          printf '%s\n' "$BOT_VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/rapidito_deploy
-          chmod 600 ~/.ssh/rapidito_deploy
-          ssh-keygen -y -f ~/.ssh/rapidito_deploy >/dev/null
-          ssh-keyscan -p "$BOT_VPS_PORT" "$BOT_VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          echo "BOT_DIR=/home/bot.local/public_html" >> "$GITHUB_ENV"
+          printf '%s' "$BOT_VPS_SSH_KEY_B64" | base64 --decode > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keygen -y -f ~/.ssh/key >/dev/null
+          ssh-keyscan -T 5 -t ed25519 -p "$SSH_PORT" "$TARGET_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          actual_fp=$(ssh-keygen -lf ~/.ssh/known_hosts -E sha256 | awk '{print $2}' | head -1)
+          test "$actual_fp" = "$EXPECTED_HOST_FP"
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" 'echo VPS_CONNECTION_OK'
 
       - name: Read-only production inspection
-        env:
-          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
-          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
-          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
         shell: bash
         run: |
           set -euo pipefail
-          SSH=(ssh -i ~/.ssh/rapidito_deploy -p "$BOT_VPS_PORT" -o BatchMode=yes -o ConnectTimeout=10 "$BOT_VPS_USER@$BOT_VPS_HOST")
+          SSH=(ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 "$TARGET_USER@$TARGET_HOST")
           "${SSH[@]}" "BOT_DIR='$BOT_DIR' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$BOT_DIR"
@@ -55,6 +55,7 @@ jobs:
           test -f docker-compose.yml
           test -f .env
           test -f bot_logic.py
+          test -f bot_entry.py
           echo "APP_LAYOUT_OK=1"
           docker --version
           docker compose version
@@ -102,11 +103,8 @@ jobs:
           REMOTE
 
       - name: Confirm no restart occurred
-        env:
-          BOT_VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
-          BOT_VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
-          BOT_VPS_USER: ${{ secrets.BOT_VPS_USER }}
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/rapidito_deploy -p "$BOT_VPS_PORT" -o BatchMode=yes "$BOT_VPS_USER@$BOT_VPS_HOST" "cd '$BOT_DIR' && docker compose ps bot_backend evolution_api"
+          ssh -i ~/.ssh/key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET_USER@$TARGET_HOST" \
+            "cd '$BOT_DIR' && docker compose ps bot_backend evolution_api"
