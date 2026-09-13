@@ -10,10 +10,21 @@ permissions:
   contents: read
 
 jobs:
-  inspect:
+  deploy-history:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate payment history endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l public/payment_audit.php
+          grep -q '2.0-payment-registry-30d' public/payment_audit.php
+          grep -q "payment_registry_history" public/payment_audit.php
+
       - name: Configure Hostinger SSH
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
@@ -31,49 +42,57 @@ jobs:
           ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
           ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Inspect validated payment stores and WispHub schema
+      - name: Deploy only payment history endpoint
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          REMOTE_BASE="domains/wifirapidito.com/public_html"
+          TMP_NAME="payment_audit.php.tmp.${GITHUB_SHA}"
+
+          scp -i ~/.ssh/hostinger_deploy -P 65002 public/payment_audit.php \
+            "$HOSTINGER_USER@$HOSTINGER_HOST:~/$REMOTE_BASE/$TMP_NAME"
+
+          ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            "SHA='$GITHUB_SHA' TMP_NAME='$TMP_NAME' bash -s" <<'REMOTE'
           set -euo pipefail
           BASE="$HOME/domains/wifirapidito.com/public_html"
-          test -d "$BASE"
+          test -s "$BASE/payment_registry_lib.php"
+          test -s "$BASE/$TMP_NAME"
+          php -l "$BASE/$TMP_NAME" >/dev/null
+
+          mkdir -p "$BASE/.deploy-backups"
+          if [[ -f "$BASE/payment_audit.php" ]]; then
+            cp "$BASE/payment_audit.php" "$BASE/.deploy-backups/payment_audit.php.$SHA"
+          fi
+          mv "$BASE/$TMP_NAME" "$BASE/payment_audit.php"
+          chmod 644 "$BASE/payment_audit.php"
+          php -l "$BASE/payment_audit.php" >/dev/null
+
           php -r '
-            $base=getenv("HOME")."/domains/wifirapidito.com/public_html";
-            $private=dirname($base)."/.wifi-rapidito-private";
-            $registry=$private."/validated-payments.json";
-            $audit=$private."/payment-audit.jsonl";
-            $validated=0; $sources=[]; $latest="";
-            if (is_file($registry)) {
-              $rows=json_decode(file_get_contents($registry), true);
-              if (is_array($rows)) foreach ($rows as $row) {
-                if (!is_array($row) || ($row["status"]??"")!=="validated") continue;
-                $validated++;
-                $src=$row["source"]??"unknown";
-                $sources[$src]=($sources[$src]??0)+1;
-                $ts=(string)($row["validated_at"]??$row["started_at"]??"");
-                if ($ts>$latest) $latest=$ts;
-              }
+            require getenv("HOME")."/domains/wifirapidito.com/public_html/payment_registry_lib.php";
+            $cutoff=time()-(30*86400); $count=0; $portal=0; $bot=0;
+            foreach(payment_registry_history(2000,false) as $r){
+              $ts=strtotime((string)($r["validated_at"]??$r["updated_at"]??$r["created_at"]??""));
+              if(!$ts || $ts<$cutoff) continue;
+              $count++; $s=$r["source"]??"";
+              if($s==="portal_autogestion") $portal++;
+              if($s==="assistant_virtual") $bot++;
             }
-            echo "REGISTRY_EXISTS=".(is_file($registry)?"1":"0").PHP_EOL;
-            echo "REGISTRY_VALIDATED_COUNT=".$validated.PHP_EOL;
-            echo "REGISTRY_SOURCES=".json_encode($sources).PHP_EOL;
-            echo "REGISTRY_LATEST=".$latest.PHP_EOL;
-            echo "LEGACY_AUDIT_EXISTS=".(is_file($audit)?"1":"0").PHP_EOL;
-            echo "LEGACY_AUDIT_LINES=".(is_file($audit)?count(file($audit, FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES)):0).PHP_EOL;
-            require $base."/config_wisphub.php";
-            $url=rtrim(WISPHUB_API_URL,"/")."/pagos/?limit=5";
-            $ch=curl_init($url);
-            curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"],CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);
-            $body=curl_exec($ch); $code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE); curl_close($ch);
-            echo "WISPHUB_PAGOS_HTTP=".$code.PHP_EOL;
-            $data=json_decode((string)$body,true);
-            $rows=is_array($data["results"]??null)?$data["results"]:(is_array($data)&&array_is_list($data)?$data:[]);
-            echo "WISPHUB_PAGE_COUNT=".count($rows).PHP_EOL;
-            if ($rows && is_array($rows[0])) { $keys=array_keys($rows[0]); sort($keys); echo "WISPHUB_ROW_KEYS=".implode(",",$keys).PHP_EOL; }
+            echo "REGISTRY_30D_TOTAL=$count\nPORTAL_30D=$portal\nBOT_30D=$bot\n";
+            if($count<1) exit(2);
           '
           REMOTE
+
+      - name: Verify public health
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl -fsS --retry 4 --retry-delay 2 -H 'Cache-Control: no-cache' \
+            "https://wifirapidito.com/payment_audit.php?health=${GITHUB_SHA}")"
+          echo "$body"
+          grep -q '2.0-payment-registry-30d' <<<"$body"
+          grep -q 'validated-payments-registry' <<<"$body"
+          echo 'PAYMENT_HISTORY_DEPLOYED=1'
