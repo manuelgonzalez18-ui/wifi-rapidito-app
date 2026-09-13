@@ -1,6 +1,5 @@
 name: Payment Active Config Diagnostics
 
-# Re-run 2026-09-12 after portal and bot payment validation reports.
 on:
   push:
     branches: [reconstruccion-bot-10-opciones]
@@ -23,13 +22,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
           mkdir -p ~/.ssh
           printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_deploy
           chmod 600 ~/.ssh/hostinger_deploy
           ssh-keygen -y -f ~/.ssh/hostinger_deploy >/dev/null
-          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Inspect active Banesco runtime safely
+      - name: Inspect validated payment stores and WispHub schema
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -39,70 +41,39 @@ jobs:
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
           BASE="$HOME/domains/wifirapidito.com/public_html"
-          FILE="$BASE/banesco_api.php"
-          PROXY="$BASE/proxy_payments.php"
-          test -s "$FILE"
-          test -s "$PROXY"
-
-          cat > /tmp/rapidito_inspect_banesco.php <<'PHP'
-          <?php
-          $file = $argv[1];
-          require $file;
-          echo "=== Runtime-selected configuration ===\n";
-          foreach (["BANESCO_ENV", "BANESCO_API_URL", "BANESCO_SSO_URL"] as $name) {
-              if (!defined($name)) { echo $name . "=undefined\n"; continue; }
-              $value = constant($name);
-              if (str_ends_with($name, "_URL")) {
-                  echo $name . "_host=" . (parse_url((string)$value, PHP_URL_HOST) ?: "invalid") . "\n";
-              } else {
-                  echo $name . "=" . preg_replace('/[^a-zA-Z0-9_-]/', '', (string)$value) . "\n";
+          test -d "$BASE"
+          php -r '
+            $base=getenv("HOME")."/domains/wifirapidito.com/public_html";
+            $private=dirname($base)."/.wifi-rapidito-private";
+            $registry=$private."/validated-payments.json";
+            $audit=$private."/payment-audit.jsonl";
+            $validated=0; $sources=[]; $latest="";
+            if (is_file($registry)) {
+              $rows=json_decode(file_get_contents($registry), true);
+              if (is_array($rows)) foreach ($rows as $row) {
+                if (!is_array($row) || ($row["status"]??"")!=="validated") continue;
+                $validated++;
+                $src=$row["source"]??"unknown";
+                $sources[$src]=($sources[$src]??0)+1;
+                $ts=(string)($row["validated_at"]??$row["started_at"]??"");
+                if ($ts>$latest) $latest=$ts;
               }
-          }
-          foreach (["BANESCO_CLIENT_ID", "BANESCO_CLIENT_SECRET", "BANESCO_CLIENT_ID_PROD", "BANESCO_CLIENT_SECRET_PROD"] as $name) {
-              echo $name . "_configured=" . ((defined($name) && strlen((string)constant($name)) > 0) ? "yes" : "no") . "\n";
-          }
-
-          $ref = new ReflectionClass('BanescoAPI');
-          $method = $ref->getMethod('checkTransaction');
-          echo "check_required_params=" . $method->getNumberOfRequiredParameters() . "\n";
-          echo "check_total_params=" . $method->getNumberOfParameters() . "\n";
-          echo "check_start_line=" . $method->getStartLine() . "\n";
-          echo "check_end_line=" . $method->getEndLine() . "\n";
-
-          $lines = file($file);
-          $body = implode('', array_slice($lines, $method->getStartLine() - 1, $method->getEndLine() - $method->getStartLine() + 1));
-
-          preg_match_all('/\$options\s*\[\s*[\'\"]([^\'\"]+)[\'\"]\s*\]/', $body, $m);
-          $optionKeys = array_values(array_unique($m[1] ?? []));
-          sort($optionKeys);
-          echo "option_keys=" . implode(',', $optionKeys) . "\n";
-
-          echo "=== Option access lines (literals redacted) ===\n";
-          foreach (preg_split('/\R/', $body) as $line) {
-              if (strpos($line, '$options') === false) continue;
-              $line = preg_replace('/([\'\"])(?:(?!\1).)*\1/', "'<redacted>'", $line);
-              $line = preg_replace('/\s+/', ' ', trim($line));
-              echo $line . "\n";
-          }
-
-          echo "=== Banesco request payload expressions (string literals redacted) ===\n";
-          foreach (["referenceNumber", "accountId", "amount", "startDt", "endDt", "phoneNum", "bankId"] as $key) {
-              if (preg_match('/[\'\"]' . preg_quote($key, '/') . '[\'\"]\s*=>\s*([^,\r\n]+)/', $body, $match)) {
-                  $expr = preg_replace('/([\'\"])(?:(?!\1).)*\1/', "'<redacted>'", trim($match[1]));
-                  echo $key . "_expr=" . $expr . "\n";
-              } else {
-                  echo $key . "_expr=not_found\n";
-              }
-          }
-          PHP
-
-          php /tmp/rapidito_inspect_banesco.php "$FILE"
-          rm -f /tmp/rapidito_inspect_banesco.php
-
-          echo '=== Current proxy invocation ==='
-          grep -n 'BanescoAPI::checkTransaction' "$PROXY" | sed -E 's/[[:space:]]+/ /g' || true
-          echo 'proxy_fields_available:'
-          for field in amount banco_origen phone_emisor payment_date payment_type payment_type_label; do
-            if grep -q "$field" "$PROXY"; then echo "  $field=yes"; else echo "  $field=no"; fi
-          done
+            }
+            echo "REGISTRY_EXISTS=".(is_file($registry)?"1":"0").PHP_EOL;
+            echo "REGISTRY_VALIDATED_COUNT=".$validated.PHP_EOL;
+            echo "REGISTRY_SOURCES=".json_encode($sources).PHP_EOL;
+            echo "REGISTRY_LATEST=".$latest.PHP_EOL;
+            echo "LEGACY_AUDIT_EXISTS=".(is_file($audit)?"1":"0").PHP_EOL;
+            echo "LEGACY_AUDIT_LINES=".(is_file($audit)?count(file($audit, FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES)):0).PHP_EOL;
+            require $base."/config_wisphub.php";
+            $url=rtrim(WISPHUB_API_URL,"/")."/pagos/?limit=5";
+            $ch=curl_init($url);
+            curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>["Authorization: Api-Key ".WISPHUB_TOKEN,"Accept: application/json"],CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);
+            $body=curl_exec($ch); $code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE); curl_close($ch);
+            echo "WISPHUB_PAGOS_HTTP=".$code.PHP_EOL;
+            $data=json_decode((string)$body,true);
+            $rows=is_array($data["results"]??null)?$data["results"]:(is_array($data)&&array_is_list($data)?$data:[]);
+            echo "WISPHUB_PAGE_COUNT=".count($rows).PHP_EOL;
+            if ($rows && is_array($rows[0])) { $keys=array_keys($rows[0]); sort($keys); echo "WISPHUB_ROW_KEYS=".implode(",",$keys).PHP_EOL; }
+          '
           REMOTE
