@@ -20,14 +20,15 @@ function promiseRespond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    promiseRespond(200, ['status' => 'ready', 'version' => '3.0-restriction-enforcement']);
+    promiseRespond(200, ['status' => 'ready', 'version' => '3.1-promise-api-net']);
 }
 
 require_once __DIR__ . '/config_wisphub.php';
 require_once __DIR__ . '/promise_restrictions_lib.php';
 
 $logFile = __DIR__ . '/api_logs.txt';
-$baseUrl = rtrim(WISPHUB_API_URL, '/') . '/promesas-de-pago/';
+$promiseApiBase = getenv('WISPHUB_PROMISES_API_URL') ?: 'https://api.wisphub.net/api/promesas-de-pago/';
+$baseUrl = rtrim($promiseApiBase, '/') . '/';
 $method = $_SERVER['REQUEST_METHOD'];
 
 function promiseLog($message) {
@@ -35,7 +36,7 @@ function promiseLog($message) {
     @file_put_contents($logFile, '[' . date('Y-m-d H:i:s') . "][PROMISE] $message\n", FILE_APPEND);
 }
 
-function wisphubRequest($url, $method = 'GET', $payload = null, &$httpCode = null, &$error = null) {
+function wisphubRequest($url, $method = 'GET', $payload = null, &$httpCode = null, &$error = null, &$contentType = null) {
     $headers = [
         'Authorization: Api-Key ' . WISPHUB_TOKEN,
         'Accept: application/json',
@@ -62,6 +63,7 @@ function wisphubRequest($url, $method = 'GET', $payload = null, &$httpCode = nul
     $errno = curl_errno($ch);
     $errorText = curl_error($ch);
     $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $contentType = strtolower((string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
     curl_close($ch);
 
     if ($body === false || $errno !== 0) {
@@ -101,7 +103,8 @@ if ($method === 'POST') {
 
     $invoiceHttp = 0;
     $invoiceError = null;
-    $invoiceBody = wisphubRequest(rtrim(WISPHUB_API_URL, '/') . '/facturas/' . $invoiceId . '/', 'GET', null, $invoiceHttp, $invoiceError);
+    $invoiceType = null;
+    $invoiceBody = wisphubRequest(rtrim(WISPHUB_API_URL, '/') . '/facturas/' . $invoiceId . '/', 'GET', null, $invoiceHttp, $invoiceError, $invoiceType);
     if ($invoiceBody === null || $invoiceHttp < 200 || $invoiceHttp >= 300) {
         promiseLog("Invoice verification failed for invoice=$invoiceId http=$invoiceHttp error=$invoiceError");
         promiseRespond(503, [
@@ -112,6 +115,7 @@ if ($method === 'POST') {
 
     $invoice = json_decode($invoiceBody, true);
     if (!is_array($invoice)) {
+        promiseLog("Invoice verification returned non-JSON for invoice=$invoiceId type=$invoiceType");
         promiseRespond(503, ['error' => 'WispHub devolvió una factura no válida. Intenta nuevamente.']);
     }
 
@@ -132,20 +136,43 @@ $query = $_SERVER['QUERY_STRING'] ?? '';
 $finalUrl = $baseUrl . ($query !== '' ? '?' . $query : '');
 $httpCode = 0;
 $requestError = null;
-$response = wisphubRequest($finalUrl, $method === 'POST' ? 'POST' : 'GET', $method === 'POST' ? $data : null, $httpCode, $requestError);
+$contentType = null;
+$response = wisphubRequest($finalUrl, $method === 'POST' ? 'POST' : 'GET', $method === 'POST' ? $data : null, $httpCode, $requestError, $contentType);
 
 if ($response === null) {
     promiseLog("WispHub request failed url=$finalUrl error=$requestError");
     promiseRespond(503, ['error' => 'WispHub no está respondiendo en este momento.', 'retryable' => true]);
 }
 
-if ($method === 'POST' && ($httpCode === 200 || $httpCode === 201)) {
+$decoded = json_decode((string) $response, true);
+if (!is_array($decoded)) {
+    $preview = preg_replace('/\s+/', ' ', substr((string) $response, 0, 180));
+    promiseLog("Non-JSON promise response url=$finalUrl code=$httpCode type=$contentType preview=$preview");
+    promiseRespond(502, [
+        'error' => 'WispHub devolvió una respuesta inesperada al registrar la promesa. Intenta nuevamente en unos minutos.',
+        'retryable' => true,
+    ]);
+}
+
+if ($httpCode < 200 || $httpCode >= 300) {
+    $safeError = trim((string) ($decoded['error'] ?? $decoded['detail'] ?? $decoded['message'] ?? ''));
+    if ($safeError === '' || stripos($safeError, '<html') !== false || stripos($safeError, '<!doctype') !== false) {
+        $safeError = 'WispHub no pudo registrar la promesa en este momento.';
+    }
+    promiseLog("Promise rejected url=$finalUrl code=$httpCode error=" . substr($safeError, 0, 180));
+    promiseRespond($httpCode ?: 502, [
+        'error' => $safeError,
+        'retryable' => $httpCode >= 500,
+    ]);
+}
+
+if ($method === 'POST') {
     sendPromiseEmailNotification($data);
 }
 
-promiseLog("REQ: $finalUrl | CODE: $httpCode | RES: " . substr((string) $response, 0, 120));
-http_response_code($httpCode ?: 502);
-echo $response;
+promiseLog("REQ: $finalUrl | CODE: $httpCode | JSON OK");
+http_response_code($httpCode ?: 200);
+echo json_encode($decoded, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
 function sendPromiseEmailNotification($data) {
     $to = 'admin@wifirapidito.com';
