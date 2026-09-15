@@ -1,0 +1,171 @@
+name: Payment Stack Repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'public/banesco_api.php'
+      - 'public/proxy_payments.php'
+      - 'public/payment_audit.php'
+      - 'public/payment_audit_lib.php'
+      - '.github/workflows/payment-stack-repair.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'public/banesco_api.php'
+      - 'public/proxy_payments.php'
+      - 'public/payment_audit.php'
+      - 'public/payment_audit_lib.php'
+      - '.github/workflows/payment-stack-repair.yml'
+
+permissions:
+  contents: read
+  actions: write
+  statuses: write
+
+jobs:
+  validate-and-deploy-hostinger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate payment backend syntax
+        run: |
+          set -euo pipefail
+          php -l public/banesco_api.php
+          php -l public/proxy_payments.php
+          php -l public/payment_audit_lib.php
+          php -l public/payment_audit.php
+          grep -q "'amount'" public/banesco_api.php
+          grep -q "'startDt'" public/banesco_api.php
+          grep -q "'bankId'" public/banesco_api.php
+          grep -q "'phoneNum'" public/banesco_api.php
+          grep -q "1.4-payment-audit-30d-all-sources" public/payment_audit.php
+
+      - name: Configure Hostinger SSH
+        if: github.event_name == 'push'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_payment
+          chmod 600 ~/.ssh/hostinger_payment
+          ssh-keygen -y -f ~/.ssh/hostinger_payment >/dev/null
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Backup and deploy payment backend
+        if: github.event_name == 'push'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
+          stamp="$(date +%Y%m%d-%H%M%S)"
+          files=(banesco_api.php proxy_payments.php payment_audit_lib.php payment_audit.php)
+
+          ssh -i ~/.ssh/hostinger_payment -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            "mkdir -p '$REMOTE_BASE/.portal-backups' && cd '$REMOTE_BASE' && tar -czf '.portal-backups/payment-stack-$stamp.tar.gz' --ignore-failed-read banesco_api.php proxy_payments.php payment_audit_lib.php payment_audit.php 2>/dev/null || true"
+
+          for file in "${files[@]}"; do
+            scp -i ~/.ssh/hostinger_payment -P 65002 \
+              "public/$file" \
+              "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/$file.next"
+            ssh -i ~/.ssh/hostinger_payment -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+              "php -l '$REMOTE_BASE/$file.next' >/dev/null && mv '$REMOTE_BASE/$file.next' '$REMOTE_BASE/$file'"
+          done
+
+          ssh -i ~/.ssh/hostinger_payment -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            "grep -q \"'startDt'\" '$REMOTE_BASE/banesco_api.php' && grep -q \"'phoneNum'\" '$REMOTE_BASE/banesco_api.php' && grep -q '1.4-payment-audit-30d-all-sources' '$REMOTE_BASE/payment_audit.php'"
+
+          ssh -i ~/.ssh/hostinger_payment -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            "find '$REMOTE_BASE/.portal-backups' -type f -name 'payment-stack-*.tar.gz' -mtime +14 -delete || true"
+
+      - name: Verify payment audit health
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            HEALTH="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/payment_audit.php?health=$GITHUB_SHA" 2>/dev/null || true)"
+            if grep -q '1.4-payment-audit-30d-all-sources' <<<"$HEALTH"; then
+              echo 'Payment audit backend verified.'
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Payment audit backend public verification failed.'
+          exit 1
+
+      - name: Publish deployment status
+        if: success() && github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              context: 'Payment Stack Deploy',
+              description: 'Banesco validation and payment audit deployed and verified',
+            });
+
+  snapshot-live-rapidito:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure bot VPS SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_KEY"
+          VPS_PORT="${VPS_PORT:-22}"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/vps_payment
+          chmod 600 ~/.ssh/vps_payment
+          ssh-keygen -y -f ~/.ssh/vps_payment >/dev/null
+          ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Snapshot running Rapidito bot source
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VPS_PORT="${VPS_PORT:-22}"
+          remote_path="$(ssh -i ~/.ssh/vps_payment -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'for base in "$HOME" /opt /srv; do [ -d "$base" ] || continue; while IFS= read -r candidate; do if grep -q "container_name:[[:space:]]*bot_backend" "$candidate" 2>/dev/null; then dirname "$candidate"; exit 0; fi; done < <(find "$base" -maxdepth 6 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null); done; exit 1')"
+          test -n "$remote_path"
+          scp -i ~/.ssh/vps_payment -P "$VPS_PORT" "$VPS_USER@$VPS_HOST:$remote_path/bot_logic.py" live_bot_logic.py
+          python -m py_compile live_bot_logic.py
+          grep -n -E 'Banesco|banesco|paymentId|phoneNum|bankId|startDt|payment_audit' live_bot_logic.py | head -n 200 > live_payment_markers.txt || true
+
+      - name: Upload live bot snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapidito-live-payment-diagnostic
+          path: |
+            live_bot_logic.py
+            live_payment_markers.txt
+          retention-days: 1
