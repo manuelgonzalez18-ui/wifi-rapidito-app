@@ -157,3 +157,5 @@ jobs:
           echo "IMAGE=$IMAGE"
           echo "BACKUP=$BACKUP"
           REMOTE
+
+# retry-compatible-reset
