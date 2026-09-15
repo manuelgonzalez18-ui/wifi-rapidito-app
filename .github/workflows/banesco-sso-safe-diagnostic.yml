@@ -1,0 +1,75 @@
+name: Banesco SSO Safe Diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/banesco-sso-safe-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST" && test -n "$HOSTINGER_USER" && test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_sso_diag
+          chmod 600 ~/.ssh/hostinger_sso_diag
+          ssh-keygen -y -f ~/.ssh/hostinger_sso_diag >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Test production SSO without exposing credentials or response body
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_sso_diag -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/domains/wifirapidito.com/public_html"
+          php <<'PHP'
+          <?php
+          try {
+              require 'banesco_api.php';
+              echo 'env_prod=' . ((defined('BANESCO_ENV') && BANESCO_ENV === 'PROD') ? 'yes' : 'no') . PHP_EOL;
+              echo 'class_exists=' . (class_exists('BanescoAPI') ? 'yes' : 'no') . PHP_EOL;
+              echo 'method_exists=' . (method_exists('BanescoAPI', 'getToken') ? 'yes' : 'no') . PHP_EOL;
+              $cache = defined('BANESCO_TOKEN_CACHE') ? BANESCO_TOKEN_CACHE : '';
+              echo 'cache_exists=' . (($cache !== '' && is_file($cache)) ? 'yes' : 'no') . PHP_EOL;
+              $method = new ReflectionMethod('BanescoAPI', 'getToken');
+              $method->setAccessible(true);
+              $token = (string)$method->invoke(null);
+              echo 'token_valid=' . (strlen($token) >= 16 ? 'yes' : 'no') . PHP_EOL;
+          } catch (Throwable $e) {
+              echo 'token_valid=no' . PHP_EOL;
+              $message = (string)$e->getMessage();
+              if (preg_match('/Code:\s*(\d+)/i', $message, $m)) {
+                  echo 'http_code=' . $m[1] . PHP_EOL;
+              } else {
+                  echo 'http_code=unknown' . PHP_EOL;
+              }
+              $lower = strtolower($message);
+              $category = 'other';
+              if (str_contains($lower, 'timed out') || str_contains($lower, 'timeout')) $category = 'timeout';
+              elseif (str_contains($lower, 'resolve host') || str_contains($lower, 'name or service')) $category = 'dns';
+              elseif (str_contains($lower, 'ssl') || str_contains($lower, 'certificate')) $category = 'tls';
+              elseif (preg_match('/Code:\s*4\d\d/i', $message)) $category = 'auth_or_request';
+              elseif (preg_match('/Code:\s*5\d\d/i', $message)) $category = 'remote_server';
+              elseif (preg_match('/Code:\s*0/i', $message)) $category = 'network_or_curl';
+              echo 'error_category=' . $category . PHP_EOL;
+              exit(10);
+          }
+          PHP
+          REMOTE
