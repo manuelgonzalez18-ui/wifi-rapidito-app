@@ -37,8 +37,10 @@ jobs:
           ssh -i ~/.ssh/hostinger -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'cd "$HOME/domains/wifirapidito.com/public_html" && php -r '\''
             require "config_wisphub.php";
             $urls = [
-              "app" => "https://api.wisphub.app/api/promesas-de-pago/?limit=1",
-              "net" => "https://api.wisphub.net/api/promesas-de-pago/?limit=1",
+              "app_plural" => "https://api.wisphub.app/api/promesas-de-pago/?limit=1",
+              "net_plural" => "https://api.wisphub.net/api/promesas-de-pago/?limit=1",
+              "app_singular" => "https://api.wisphub.app/api/promesa-pago/?limit=1",
+              "net_singular" => "https://api.wisphub.net/api/promesa-pago/?limit=1",
             ];
             foreach ($urls as $name => $url) {
               $ch = curl_init($url);
