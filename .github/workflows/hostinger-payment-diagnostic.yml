@@ -39,12 +39,9 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/hostinger_diag -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' > payment_diagnostic.txt <<'REMOTE'
-          set -euo pipefail
+          set -u
           BASE="$HOME/domains/wifirapidito.com/public_html"
-          PRIVATE="$HOME/domains/wifirapidito.com/.wifi-rapidito-private"
-          if [ ! -d "$PRIVATE" ]; then
-            PRIVATE="$HOME/domains/wifirapidito.com/public_html/../.wifi-rapidito-private"
-          fi
+          DOMAIN="$HOME/domains/wifirapidito.com"
 
           echo '=== LIVE FILES ==='
           for f in banesco_api.php proxy_payments.php payment_audit.php payment_audit_lib.php; do
@@ -65,10 +62,7 @@ jobs:
           grep -nE "checkTransaction|appendPaymentAudit|phone_emisor|banco_origen|payment_date|ignore_banesco_auto" "$BASE/proxy_payments.php" 2>/dev/null | head -n 160 || true
 
           echo '=== AUDIT STORE ==='
-          AUDIT="$(dirname "$BASE")/.wifi-rapidito-private/payment-audit.jsonl"
-          if [ ! -f "$AUDIT" ]; then
-            AUDIT="$BASE/../.wifi-rapidito-private/payment-audit.jsonl"
-          fi
+          AUDIT="$DOMAIN/.wifi-rapidito-private/payment-audit.jsonl"
           if [ -f "$AUDIT" ]; then
             echo 'audit_file=present'
             printf 'audit_lines='; wc -l < "$AUDIT" | tr -d ' '
@@ -79,13 +73,13 @@ jobs:
                 if($ts!==false && $ts >= $cut){ $counts["recent"]++; if(isset($counts[$src])) $counts[$src]++; else $counts["other"]++; }
               }
               foreach($counts as $k=>$v) echo $k,"=",$v,PHP_EOL;
-            ' "$AUDIT"
+            ' "$AUDIT" || true
           else
             echo 'audit_file=missing'
           fi
 
           echo '=== PRIVATE PAYMENT CONFIG SHAPE ==='
-          CONFIG="$(dirname "$BASE")/.wifi-rapidito-private/payment_secrets.php"
+          CONFIG="$DOMAIN/.wifi-rapidito-private/payment_secrets.php"
           if [ -f "$CONFIG" ]; then
             echo 'payment_secrets=present'
             grep -oE "BANESCO_[A-Z0-9_]+" "$CONFIG" | sort -u || true
@@ -95,21 +89,25 @@ jobs:
 
           echo '=== AVAILABLE PAYMENT BACKUPS ==='
           BACKUPS="$BASE/.portal-backups"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          list="$tmp/backups.txt"
+          : > "$list"
           if [ -d "$BACKUPS" ]; then
-            find "$BACKUPS" -maxdepth 1 -type f \( -name 'payment-stack-*.tar.gz' -o -name 'portal-backend-*.tar.gz' \) -printf '%T@ %f\n' 2>/dev/null | sort -nr | head -n 25 | cut -d' ' -f2-
+            find "$BACKUPS" -maxdepth 1 -type f \( -name 'payment-stack-*.tar.gz' -o -name 'portal-backend-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null \
+              | sort -nr | head -n 20 | cut -d' ' -f2- > "$list" || true
+            while IFS= read -r archive; do
+              [ -n "$archive" ] || continue
+              basename "$archive"
+            done < "$list"
           else
             echo 'backup_dir=missing'
           fi
 
           echo '=== UNIQUE BACKUP BANESCO SHAPES ==='
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-          if [ -d "$BACKUPS" ]; then
-            i=0
+          if [ -s "$list" ]; then
             while IFS= read -r archive; do
               [ -n "$archive" ] || continue
-              i=$((i+1))
-              [ "$i" -le 20 ] || break
               rm -rf "$tmp/extract"; mkdir -p "$tmp/extract"
               tar -xzf "$archive" -C "$tmp/extract" banesco_api.php proxy_payments.php 2>/dev/null || true
               if [ -f "$tmp/extract/banesco_api.php" ]; then
@@ -124,14 +122,16 @@ jobs:
                 echo "proxy_sha=$psha"
                 grep -E "checkTransaction|phone_emisor|banco_origen|appendPaymentAudit|ignore_banesco_auto" "$tmp/extract/proxy_payments.php" 2>/dev/null | head -n 50 || true
               fi
-            done < <(find "$BACKUPS" -maxdepth 1 -type f \( -name 'payment-stack-*.tar.gz' -o -name 'portal-backend-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 20 | cut -d' ' -f2-)
+            done < "$list"
           fi
           REMOTE
           cat payment_diagnostic.txt
 
       - name: Upload diagnostic summary
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hostinger-payment-diagnostic
           path: payment_diagnostic.txt
+          if-no-files-found: warn
           retention-days: 1
