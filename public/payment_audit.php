@@ -6,6 +6,9 @@ header('Content-Type: application/json; charset=UTF-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('X-Content-Type-Options: nosniff');
 
+define('PAYMENT_AUDIT_VERSION', '1.5-payment-audit-paid-invoices');
+define('PAYMENT_AUDIT_COMPAT_VERSION', '1.4-payment-audit-30d-all-sources');
+
 function auditRespond($status, $payload) {
     http_response_code($status);
     echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -15,7 +18,11 @@ function auditRespond($status, $payload) {
 require_once __DIR__ . '/payment_audit_lib.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    auditRespond(200, ['status' => 'ready', 'version' => '1.5-payment-audit-paid-invoices']);
+    auditRespond(200, [
+        'status' => 'ready',
+        'version' => PAYMENT_AUDIT_VERSION,
+        'compat_version' => PAYMENT_AUDIT_COMPAT_VERSION,
+    ]);
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -362,5 +369,6 @@ auditRespond(200, [
     'wisphub_count' => count($recent),
     'wisphub_status' => $wisphubDiagnostic['status'] ?? 'unknown',
     'wisphub_source' => $wisphubDiagnostic['source'] ?? 'facturas',
-    'version' => '1.5-payment-audit-paid-invoices',
+    'version' => PAYMENT_AUDIT_VERSION,
+    'compat_version' => PAYMENT_AUDIT_COMPAT_VERSION,
 ]);
