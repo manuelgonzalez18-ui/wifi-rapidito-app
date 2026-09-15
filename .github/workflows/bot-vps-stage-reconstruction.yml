@@ -63,6 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python vps/apply_entry_compat.py
           files=(
             bot_logic.py bot_entry.py bot_presentation.py bot_flows.py kommo_service.py
             validate_bot_env.py
