@@ -1,0 +1,154 @@
+name: Banesco Production Guard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/banesco-production-guard.yml'
+  workflow_run:
+    workflows: ['Frontend CI', 'Payment Stack Repair']
+    types: [completed]
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  restore:
+    if: github.event_name == 'push' || github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST" && test -n "$HOSTINGER_USER" && test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_banesco_guard
+          chmod 600 ~/.ssh/hostinger_banesco_guard
+          ssh-keygen -y -f ~/.ssh/hostinger_banesco_guard >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Restore certified production Banesco implementation
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_banesco_guard -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          BACKUPS="$BASE/.portal-backups"
+          list="$(mktemp)"
+          find "$BACKUPS" -maxdepth 1 -type f \( -name 'payment-stack-*.tar.gz' -o -name 'portal-backend-*.tar.gz' -o -name 'payment-hotfix-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | cut -d' ' -f2- > "$list" || true
+          archive=""
+          while IFS= read -r candidate; do
+            [ -n "$candidate" ] || continue
+            if tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q 'BANESCO_API_PROD' \
+              && tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q "'referenceNumber'" \
+              && tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q "'accountId'"; then
+              archive="$candidate"
+              break
+            fi
+          done < "$list"
+          rm -f "$list"
+          test -n "$archive" || { echo 'Certified production Banesco backup not found.'; exit 2; }
+
+          stamp="$(date +%Y%m%d-%H%M%S)"
+          if [ -f "$BASE/banesco_api.php" ]; then cp "$BASE/banesco_api.php" "$BASE/.portal-backups/banesco-before-guard-$stamp.php"; fi
+          tar -xOf "$archive" banesco_api.php > "$BASE/banesco_api.php.next"
+          php -l "$BASE/banesco_api.php.next" >/dev/null
+          grep -q 'BANESCO_API_PROD' "$BASE/banesco_api.php.next"
+          grep -q "'referenceNumber'" "$BASE/banesco_api.php.next"
+          grep -q "'accountId'" "$BASE/banesco_api.php.next"
+          mv "$BASE/banesco_api.php.next" "$BASE/banesco_api.php"
+          echo 'Certified Banesco production implementation restored.'
+          REMOTE
+
+      - name: Recover validated-payment history from successful Banesco log entries
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_banesco_guard -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          DOMAIN="$HOME/domains/wifirapidito.com"
+          BASE="$DOMAIN/public_html"
+          PRIVATE="$DOMAIN/.wifi-rapidito-private"
+          AUDIT="$PRIVATE/payment-audit.jsonl"
+          LOG="$BASE/banesco_api_debug.log"
+          mkdir -p "$PRIVATE" && chmod 700 "$PRIVATE"
+          touch "$AUDIT" && chmod 600 "$AUDIT"
+
+          if [ -s "$LOG" ]; then
+            script="$(mktemp --suffix=.php)"
+            cat > "$script" <<'PHP'
+          <?php
+          $log=file_get_contents($argv[1]); $audit=$argv[2]; $cutoff=time()-30*86400; $botIp='76.13.100.2'; $seen=[];
+          foreach (@file($audit, FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+              $r=json_decode($line,true); if(!is_array($r)) continue;
+              $key=strtolower(trim((string)($r['source']??''))).'|'.trim((string)($r['reference']??'')).'|'.substr((string)($r['payment_date']??''),0,10).'|'.number_format((float)($r['amount']??0),2,'.','');
+              $seen[$key]=true;
+          }
+          $pending=null; $added=['portal'=>0,'whatsapp_bot'=>0];
+          foreach (preg_split('/^-{40}\s*$/m',$log) as $block) {
+              $block=trim($block); if($block==='') continue;
+              if(!preg_match('/^\[([^\]]+)\] === (REQUEST SENT|RESPONSE RECEIVED) ===\s*(.*)$/s',$block,$m)) continue;
+              $stamp=strtotime(trim($m[1])); $kind=$m[2]; $json=json_decode(trim($m[3]),true); if(!is_array($json)) continue;
+              if($kind==='REQUEST SENT'){ $pending=['stamp'=>$stamp,'data'=>$json]; continue; }
+              if($pending===null) continue; $request=$pending; $pending=null;
+              $status=$json['body']['httpStatus']??null;
+              if(!is_array($status)||(string)($status['statusCode']??'')!=='200'||strtoupper((string)($status['statusDesc']??''))!=='OK') continue;
+              $tx=$request['data']['dataRequest']['transaction']??[]; if(!is_array($tx)) continue;
+              $reference=trim((string)($tx['referenceNumber']??'')); if($reference==='') continue;
+              $date=substr((string)($tx['startDt']??''),0,10); $ts=$date!==''?strtotime($date):($request['stamp']?:false); if($ts===false||$ts<$cutoff) continue; $date=date('Y-m-d',$ts);
+              $amount=is_numeric($tx['amount']??null)?round((float)$tx['amount'],2):0.0;
+              $ip=(string)($request['data']['dataRequest']['device']['ipAddress']??''); $source=$ip===$botIp?'whatsapp_bot':'portal';
+              $key=$source.'|'.$reference.'|'.$date.'|'.number_format($amount,2,'.',''); if(isset($seen[$key])) continue; $seen[$key]=true;
+              $row=['id'=>'backfill-'.substr(hash('sha256',$key),0,20),'created_at'=>date('c',$request['stamp']?:$ts),'source'=>$source,'client_name'=>'','username'=>'','service_id'=>'','invoice_id'=>'','reference'=>$reference,'amount'=>$amount,'currency'=>'VES','payment_date'=>$date,'method'=>'Banesco validado (histórico)','banesco_status'=>'validated','wisphub_status'=>'unknown','wisphub_task_id'=>''];
+              file_put_contents($audit,json_encode($row,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES).PHP_EOL,FILE_APPEND|LOCK_EX); $added[$source]++;
+          }
+          echo 'Recovered history: portal='.$added['portal'].' assistant='.$added['whatsapp_bot'].PHP_EOL;
+          PHP
+            php "$script" "$LOG" "$AUDIT"
+            rm -f "$script"
+          else
+            echo 'No historical Banesco debug log found; audit initialized for new validations.'
+          fi
+          php -r '$p=$argv[1];$c=["portal"=>0,"whatsapp_bot"=>0];foreach(@file($p,FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES)?:[] as $l){$r=json_decode($l,true);if(is_array($r)&&isset($c[$r["source"]??""]))$c[$r["source"]]++;}echo "Audit totals: portal={$c["portal"]} assistant={$c["whatsapp_bot"]}\n";' "$AUDIT"
+          REMOTE
+
+      - name: Verify production Banesco SSO and public audit backend
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_banesco_guard -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/domains/wifirapidito.com/public_html"
+          php -r 'require "banesco_api.php"; if (!defined("BANESCO_ENV") || BANESCO_ENV !== "PROD") exit(2); $m=new ReflectionMethod("BanescoAPI","getToken"); $m->setAccessible(true); $token=(string)$m->invoke(null); if(strlen($token)<16) exit(3); echo "Banesco production SSO verified.\n";'
+          REMOTE
+          for attempt in {1..12}; do
+            health="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/payment_audit.php?health=guard-$GITHUB_RUN_ID" 2>/dev/null || true)"
+            if grep -q '1.4-payment-audit-30d-all-sources' <<<"$health"; then echo 'Payment audit public health verified.'; exit 0; fi
+            sleep 5
+          done
+          exit 4
+
+      - name: Publish guard status
+        if: success() && github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.createCommitStatus({owner:context.repo.owner,repo:context.repo.repo,sha:context.sha,state:'success',context:'Banesco Production Guard',description:'Certified PROD validator + audit history verified'});
