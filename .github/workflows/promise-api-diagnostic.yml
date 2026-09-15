@@ -1,0 +1,64 @@
+name: Promise API Diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/promise-api-diagnostic.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger
+          chmod 600 ~/.ssh/hostinger
+          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Inspect promise API responses and recent proxy logs
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'cd "$HOME/domains/wifirapidito.com/public_html" && php -r '\''
+            require "config_wisphub.php";
+            $urls = [
+              "app" => "https://api.wisphub.app/api/promesas-de-pago/?limit=1",
+              "net" => "https://api.wisphub.net/api/promesas-de-pago/?limit=1",
+            ];
+            foreach ($urls as $name => $url) {
+              $ch = curl_init($url);
+              curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HTTPHEADER => ["Authorization: Api-Key " . WISPHUB_TOKEN, "Accept: application/json"],
+                CURLOPT_CONNECTTIMEOUT => 5,
+                CURLOPT_TIMEOUT => 15,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS => 3,
+              ]);
+              $body = curl_exec($ch);
+              $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+              $type = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+              $effective = (string)curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+              curl_close($ch);
+              $decoded = json_decode((string)$body, true);
+              $shape = is_array($decoded) ? implode(",", array_slice(array_keys($decoded), 0, 8)) : "non-json";
+              echo strtoupper($name) . " code=$code type=$type effective=$effective shape=$shape\n";
+            }
+          '\'''
+          echo '--- RECENT PROMISE LOGS ---'
+          ssh -i ~/.ssh/hostinger -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'cd "$HOME/domains/wifirapidito.com/public_html" && grep "\[PROMISE\]" api_logs.txt 2>/dev/null | tail -n 12 || true'
