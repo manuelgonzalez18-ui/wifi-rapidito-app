@@ -6,7 +6,7 @@ header('Content-Type: application/json; charset=UTF-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('X-Content-Type-Options: nosniff');
 
-define('PAYMENT_AUDIT_VERSION', '1.5-payment-audit-paid-invoices');
+define('PAYMENT_AUDIT_VERSION', '1.6-payment-audit-paid-invoices-fallback');
 define('PAYMENT_AUDIT_COMPAT_VERSION', '1.4-payment-audit-30d-all-sources');
 
 function auditRespond($status, $payload) {
@@ -26,8 +26,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // The WhatsApp bot runs on the dedicated production VPS. Portal writes use
-    // appendPaymentAudit() directly from proxy_payments.php and never hit this branch.
     $remote = $_SERVER['REMOTE_ADDR'] ?? '';
     $allowedBotIps = ['76.13.100.2'];
     if (!in_array($remote, $allowedBotIps, true)) {
@@ -146,24 +144,24 @@ function wisphubFetchJson($url) {
     ];
 }
 
-function wisphubGetPaidInvoicesPage($offset, $limit, $fromDate, $toDate) {
+function wisphubGetPaidInvoicesPage($offset, $limit, $fromDate, $toDate, $useDateRange = true) {
     require_once __DIR__ . '/config_wisphub.php';
 
-    // WispHub documenta /api/facturas/ como el recurso de consulta de pagos:
-    // estado=2 (Pagada) + rango de fecha_pago. /api/pagos/ no forma parte del
-    // contrato público y puede responder vacío/404, que era la causa del panel en cero.
     $bases = array_values(array_unique([
         'https://api.wisphub.net/api',
         rtrim(WISPHUB_API_URL, '/'),
     ]));
 
-    $query = http_build_query([
+    $params = [
         'estado' => 2,
-        'fecha_pago__range_0' => $fromDate,
-        'fecha_pago__range_1' => $toDate,
         'limit' => (int)$limit,
         'offset' => (int)$offset,
-    ]);
+    ];
+    if ($useDateRange) {
+        $params['fecha_pago__range_0'] = $fromDate;
+        $params['fecha_pago__range_1'] = $toDate;
+    }
+    $query = http_build_query($params);
 
     $lastError = 'No fue posible consultar WispHub.';
     foreach ($bases as $base) {
@@ -174,6 +172,7 @@ function wisphubGetPaidInvoicesPage($offset, $limit, $fromDate, $toDate) {
                 'data' => $result['data'],
                 'base' => $base,
                 'error' => '',
+                'date_range' => $useDateRange,
             ];
         }
         $lastError = 'WispHub ' . ($result['error'] ?? 'no disponible');
@@ -183,6 +182,7 @@ function wisphubGetPaidInvoicesPage($offset, $limit, $fromDate, $toDate) {
         'data' => null,
         'base' => '',
         'error' => $lastError,
+        'date_range' => $useDateRange,
     ];
 }
 
@@ -210,6 +210,16 @@ function invoiceServiceId($row) {
     return '';
 }
 
+function invoiceIsPaid($row) {
+    $status = $row['estado'] ?? $row['status'] ?? '';
+    if (is_array($status)) {
+        $status = auditScalar($status, ['id', 'estado', 'nombre', 'name']);
+    }
+    $normalized = strtolower(trim((string)$status));
+    if ($normalized === '') return true;
+    return in_array($normalized, ['2', 'pagada', 'pagado', 'paid'], true);
+}
+
 function wisphubRecentPayments($days = 30, &$diagnostic = null) {
     $days = max(1, (int)$days);
     $fromDate = date('Y-m-d', strtotime('-' . $days . ' days'));
@@ -219,17 +229,18 @@ function wisphubRecentPayments($days = 30, &$diagnostic = null) {
     $offset = 0;
     $out = [];
     $maxPages = 20;
+    $useDateRange = true;
 
     $diagnostic = [
         'status' => 'ok',
-        'source' => 'facturas',
+        'source' => 'facturas-date-range',
         'base' => '',
         'pages' => 0,
         'error' => '',
     ];
 
     for ($page = 0; $page < $maxPages; $page++) {
-        $pageResult = wisphubGetPaidInvoicesPage($offset, $pageSize, $fromDate, $toDate);
+        $pageResult = wisphubGetPaidInvoicesPage($offset, $pageSize, $fromDate, $toDate, $useDateRange);
         $data = $pageResult['data'];
         if ($data === null) {
             if ($page === 0) {
@@ -243,12 +254,32 @@ function wisphubRecentPayments($days = 30, &$diagnostic = null) {
         $diagnostic['pages'] += 1;
 
         $rows = is_array($data['results'] ?? null) ? $data['results'] : (array_is_list($data) ? $data : []);
+
+        // Algunas instalaciones WispHub aceptan estado=2 pero no el filtro
+        // fecha_pago__range. Si la consulta documentada vuelve vacía, retomamos
+        // la misma fuente sin rango y filtramos fecha_pago localmente.
+        if (!$rows && $page === 0 && $useDateRange) {
+            $useDateRange = false;
+            $diagnostic['source'] = 'facturas-paid-local-date-filter';
+            $diagnostic['pages'] = 0;
+            $pageResult = wisphubGetPaidInvoicesPage(0, $pageSize, $fromDate, $toDate, false);
+            $data = $pageResult['data'];
+            if ($data === null) {
+                $diagnostic['status'] = 'error';
+                $diagnostic['error'] = $pageResult['error'];
+                break;
+            }
+            $diagnostic['base'] = $pageResult['base'];
+            $diagnostic['pages'] = 1;
+            $rows = is_array($data['results'] ?? null) ? $data['results'] : (array_is_list($data) ? $data : []);
+        }
+
         if (!$rows) break;
 
         foreach ($rows as $row) {
-            if (!is_array($row)) continue;
+            if (!is_array($row) || !invoiceIsPaid($row)) continue;
 
-            $dateRaw = $row['fecha_pago'] ?? '';
+            $dateRaw = $row['fecha_pago'] ?? $row['fecha_registro'] ?? '';
             $ts = $dateRaw ? strtotime((string)$dateRaw) : false;
             if ($ts === false || $ts < $cutoff) continue;
 
@@ -319,8 +350,6 @@ if (is_file($path)) {
     }
 }
 
-// Local Portal/Bot records preserve their exact source; WispHub paid invoices
-// backfill every other payment registered during the same 30-day period.
 $wisphubDiagnostic = null;
 $recent = wisphubRecentPayments($days, $wisphubDiagnostic);
 $seen = [];
@@ -333,8 +362,6 @@ foreach (array_merge($items, $recent) as $row) {
     $amount = strtolower(trim((string)($row['amount'] ?? '')));
     $paymentId = strtolower(trim((string)($row['payment_id'] ?? '')));
 
-    // Prefer invoice/reference/date/amount so the local audit row wins over the
-    // WispHub backfill row for the same operation and its source stays accurate.
     $composite = $invoiceId . '|' . $reference . '|' . $paymentDate . '|' . $amount;
     $key = trim($composite, '|') !== ''
         ? 'cmp:' . $composite
