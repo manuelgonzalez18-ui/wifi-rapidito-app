@@ -21,13 +21,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Apply reset patch locally
+      - name: Apply compatibility and reset patches locally
         shell: bash
         run: |
           set -euo pipefail
+          python vps/apply_entry_compat.py
           python vps/apply_hola_reset.py
           python -m py_compile vps/bot_entry.py vps/bot_flows.py vps/test_bot_reset.py
           grep -q 'full_reset' vps/bot_entry.py
+          grep -q 'CLIENT_USERNAME' vps/bot_entry.py
           grep -q 'reiniciar completamente' vps/bot_flows.py
 
       - name: Configure verified SSH
