@@ -42,8 +42,9 @@ const MIME_TYPES = [
 
 // ── FUNCIÓN VALIDACIÓN AUTOMÁTICA BANESCO ────────────────────
 function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago, $totalCobrado, $nombreUser) {
-    // Según Swagger docs: POST /api/facturas/registrar-pago/{id_factura}/
-    $url = rtrim(WISPHUB_API_URL, '/') . '/facturas/registrar-pago/' . $facturaId . '/';
+    // WispHub OpenAPI: POST /api/facturas/{id_factura}/registrar-pago/
+    // El endpoint anterior invertía los segmentos y devolvía HTTP 404.
+    $url = 'https://api.wisphub.net/api/facturas/' . rawurlencode((string)$facturaId) . '/registrar-pago/';
 
     $payload = [
         'referencia'    => $referencia,
