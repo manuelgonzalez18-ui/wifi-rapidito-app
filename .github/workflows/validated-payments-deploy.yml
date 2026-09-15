@@ -1,0 +1,103 @@
+name: Validated Payments Deploy
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'public/validated_payments.php'
+      - 'public/payment_audit_lib.php'
+      - 'public/proxy_payments.php'
+      - 'src/pages/Staff/ValidatedPayments.jsx'
+      - '.github/workflows/validated-payments-deploy.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'public/validated_payments.php'
+      - 'public/payment_audit_lib.php'
+      - 'public/proxy_payments.php'
+      - 'src/pages/Staff/ValidatedPayments.jsx'
+      - '.github/workflows/validated-payments-deploy.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  deploy-endpoint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate PHP syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l public/validated_payments.php
+          php -l public/payment_audit_lib.php
+          php -l public/proxy_payments.php
+
+      - name: Configure Hostinger SSH
+        if: github.event_name == 'push'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_validated_payments
+          chmod 600 ~/.ssh/hostinger_validated_payments
+          ssh-keygen -y -f ~/.ssh/hostinger_validated_payments >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy validated payments endpoint
+        if: github.event_name == 'push'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
+          scp -i ~/.ssh/hostinger_validated_payments -P 65002 \
+            public/validated_payments.php \
+            "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/validated_payments.php.next"
+          ssh -i ~/.ssh/hostinger_validated_payments -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
+            "php -l '$REMOTE_BASE/validated_payments.php.next' >/dev/null && mv '$REMOTE_BASE/validated_payments.php.next' '$REMOTE_BASE/validated_payments.php'"
+
+      - name: Verify public endpoint health
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            HEALTH="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/validated_payments.php?health=$GITHUB_SHA" 2>/dev/null || true)"
+            if grep -q '1.0-real-client-payment-details' <<<"$HEALTH"; then
+              echo 'Validated payments endpoint verified.'
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Validated payments endpoint verification failed.'
+          exit 1
+
+      - name: Publish deployment status
+        if: success() && github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              context: 'Validated Payments Deploy',
+              description: 'Real-client validated-payment endpoint deployed',
+            });
