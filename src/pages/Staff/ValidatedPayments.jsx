@@ -4,14 +4,8 @@ import api from '../../api/client';
 import { EmptyState, LoadingBlock, PageHeading, StatusPill, Surface } from '../../components/ui/ClientUi';
 
 const VALIDATED_SOURCES = new Set(['portal', 'whatsapp_bot']);
-
 const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
 const textKey = (value) => String(value ?? '').trim().toLowerCase();
-const dateKey = (value) => String(value ?? '').trim().slice(0, 10);
-const amountKey = (value) => {
-    const amount = Number(value);
-    return Number.isFinite(amount) ? amount.toFixed(2) : '';
-};
 
 const formatAmount = (value, currency = 'VES') => {
     const amount = Number(value);
@@ -44,96 +38,6 @@ const humanStatus = (value, fallback = '—') => {
     return String(value);
 };
 
-const pickHistoryMatch = (payment, historyRows) => {
-    const paymentId = textKey(payment.payment_id);
-    if (paymentId) {
-        const match = historyRows.find((row) => textKey(row.payment_id) === paymentId);
-        if (match) return match;
-    }
-
-    const invoiceId = textKey(payment.invoice_id);
-    if (invoiceId) {
-        const invoiceMatches = historyRows.filter((row) => textKey(row.invoice_id) === invoiceId);
-        if (invoiceMatches.length === 1) return invoiceMatches[0];
-        if (invoiceMatches.length > 1) {
-            const reference = textKey(payment.reference);
-            const exact = invoiceMatches.find((row) => reference && textKey(row.reference) === reference);
-            if (exact) return exact;
-            const day = dateKey(payment.payment_date || payment.created_at);
-            const amount = amountKey(payment.amount);
-            const narrowed = invoiceMatches.filter((row) => (
-                (!day || dateKey(row.payment_date || row.created_at) === day)
-                && (!amount || amountKey(row.amount) === amount)
-            ));
-            if (narrowed.length === 1) return narrowed[0];
-        }
-    }
-
-    const reference = textKey(payment.reference);
-    if (reference) {
-        const referenceMatches = historyRows.filter((row) => textKey(row.reference) === reference);
-        if (referenceMatches.length === 1) return referenceMatches[0];
-        if (referenceMatches.length > 1) {
-            const day = dateKey(payment.payment_date || payment.created_at);
-            const amount = amountKey(payment.amount);
-            const narrowed = referenceMatches.filter((row) => (
-                (!day || dateKey(row.payment_date || row.created_at) === day)
-                && (!amount || amountKey(row.amount) === amount)
-            ));
-            if (narrowed.length === 1) return narrowed[0];
-        }
-    }
-
-    const day = dateKey(payment.payment_date || payment.created_at);
-    const amount = amountKey(payment.amount);
-    if (day && amount) {
-        const amountDateMatches = historyRows.filter((row) => (
-            dateKey(row.payment_date || row.created_at) === day
-            && amountKey(row.amount) === amount
-        ));
-        if (amountDateMatches.length === 1) return amountDateMatches[0];
-
-        const serviceId = textKey(payment.service_id);
-        if (serviceId) {
-            const byService = amountDateMatches.filter((row) => textKey(row.service_id) === serviceId);
-            if (byService.length === 1) return byService[0];
-        }
-    }
-
-    return null;
-};
-
-const enrichValidatedRows = (rows) => {
-    const historyRows = rows.filter((row) => row?.source === 'wisphub_history');
-    return rows
-        .filter((row) => VALIDATED_SOURCES.has(row?.source))
-        .map((payment) => {
-            const history = pickHistoryMatch(payment, historyRows);
-            if (!history) return payment;
-
-            const historicalMethod = textKey(payment.method).includes('histórico');
-            return {
-                ...payment,
-                client_name: history.client_name || payment.client_name,
-                username: history.username || payment.username,
-                client_id: history.client_id || payment.client_id,
-                client_document: history.client_document || payment.client_document,
-                client_phone: history.client_phone || payment.client_phone,
-                client_email: history.client_email || payment.client_email,
-                service_id: payment.service_id || history.service_id,
-                invoice_id: payment.invoice_id || history.invoice_id,
-                payment_id: payment.payment_id || history.payment_id,
-                reference: payment.reference || history.reference,
-                amount: payment.amount ?? history.amount,
-                currency: payment.currency || history.currency || 'VES',
-                payment_date: payment.payment_date || history.payment_date,
-                method: payment.payment_type_label || (!historicalMethod && payment.method ? payment.method : (history.method || payment.method)),
-                registered_method: history.registered_method || history.method || payment.registered_method,
-                history_enriched: true,
-            };
-        });
-};
-
 const DetailCell = ({ label, value, mono = false }) => {
     if (!hasValue(value)) return null;
     return (
@@ -163,7 +67,7 @@ const ValidatedPayments = () => {
                     headers: { 'Cache-Control': 'no-cache' },
                 });
                 const rows = Array.isArray(response?.data?.payments) ? response.data.payments : [];
-                if (active) setPayments(enrichValidatedRows(rows));
+                if (active) setPayments(rows.filter((row) => VALIDATED_SOURCES.has(row?.source)));
             } catch (requestError) {
                 if (active) {
                     setPayments([]);
@@ -187,11 +91,13 @@ const ValidatedPayments = () => {
             payment.client_document,
             payment.client_phone,
             payment.client_email,
+            payment.client_address,
+            payment.plan,
+            payment.node,
             payment.service_id,
             payment.invoice_id,
             payment.reference,
             payment.payment_id,
-            payment.source,
             payment.payment_date,
             payment.payment_type_label,
             payment.method,
@@ -213,7 +119,7 @@ const ValidatedPayments = () => {
             <PageHeading
                 eyebrow="Finanzas"
                 title="Pagos validados"
-                description="Últimos 30 días. Solo se muestran validaciones realizadas por el Portal de Autogestión y el Asistente Virtual Rapidito, con los datos reales del cliente y todos los detalles disponibles del pago."
+                description="Últimos 30 días. Solo Portal de Autogestión y Asistente Virtual Rapidito. Cada registro muestra la identidad real del cliente vinculada al pago y todos los datos disponibles de la validación."
                 action={(
                     <button type="button" onClick={() => setReloadKey((value) => value + 1)} className="secondary-action">
                         <RefreshCw size={16} /> Actualizar
@@ -237,13 +143,13 @@ const ValidatedPayments = () => {
             </div>
 
             <Surface className="p-4">
-                <div className="relative max-w-2xl">
+                <div className="relative max-w-3xl">
                     <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                     <input
                         type="search"
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}
-                        placeholder="Buscar por cliente, cédula, usuario, referencia, factura, servicio, banco, ID de pago o fecha"
+                        placeholder="Buscar por cliente, cédula, teléfono, usuario, referencia, factura, servicio, banco o fecha"
                         className="glass-input w-full rounded-xl py-2.5 pl-10 pr-4 text-sm"
                     />
                 </div>
@@ -268,17 +174,17 @@ const ValidatedPayments = () => {
                     </div>
 
                     {filtered.length === 0 ? (
-                        <div className="p-8 text-center text-sm text-slate-500">No se encontraron pagos validados por el Portal de Autogestión o el Asistente Virtual en los últimos 30 días.</div>
+                        <div className="p-8 text-center text-sm text-slate-500">No se encontraron pagos validados por el Portal de Autogestión o el Asistente Virtual Rapidito en los últimos 30 días.</div>
                     ) : (
                         <div className="divide-y divide-white/6">
                             {filtered.map((payment) => {
                                 const fromBot = payment.source === 'whatsapp_bot';
                                 const SourceIcon = fromBot ? Smartphone : Globe2;
-                                const reference = payment.reference || payment.payment_id || '—';
                                 const sourceName = fromBot ? 'Asistente Virtual Rapidito' : 'Portal de Autogestión';
-                                const clientName = payment.client_name || payment.username || 'Cliente sin identificar';
+                                const reference = payment.reference || payment.banesco_reference || payment.payment_id || '—';
+                                const clientName = payment.client_name || payment.username || 'Cliente no vinculado';
                                 const bank = [payment.bank_id, payment.bank_name].filter(hasValue).join(' · ');
-                                const modality = payment.payment_type_label || payment.method;
+                                const modality = payment.payment_type_label || payment.method || payment.registered_method;
                                 const bankAmount = hasValue(payment.banesco_amount)
                                     ? formatAmount(payment.banesco_amount, payment.currency || 'VES')
                                     : '';
@@ -289,13 +195,14 @@ const ValidatedPayments = () => {
                                             <div className="min-w-0">
                                                 <p className="text-lg font-semibold text-white">{clientName}</p>
                                                 <p className="mt-1 text-xs text-slate-500">
-                                                    Factura #{payment.invoice_id || '—'} · Ref. {reference}{payment.service_id ? ` · Servicio #${payment.service_id}` : ''}
+                                                    {payment.invoice_id ? `Factura #${payment.invoice_id}` : 'Factura no disponible'} · Ref. {reference}{payment.service_id ? ` · Servicio #${payment.service_id}` : ''}
                                                 </p>
                                                 <div className="mt-3 flex flex-wrap items-center gap-2">
                                                     <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${fromBot ? 'border-violet-400/20 bg-violet-400/8 text-violet-200' : 'border-cyan-400/20 bg-cyan-400/8 text-cyan-200'}`}>
                                                         <SourceIcon size={14} /> {sourceName}
                                                     </span>
                                                     <StatusPill tone="success">Validado</StatusPill>
+                                                    {payment.client_resolved === false ? <StatusPill tone="warning">Cliente pendiente de vincular</StatusPill> : null}
                                                 </div>
                                             </div>
                                             <div className="lg:text-right">
@@ -306,29 +213,33 @@ const ValidatedPayments = () => {
                                         </div>
 
                                         <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                                            <DetailCell label="Cliente" value={clientName} />
+                                            <DetailCell label="Cliente" value={payment.client_name || payment.username} />
                                             <DetailCell label="ID cliente" value={payment.client_id} mono />
                                             <DetailCell label="Usuario" value={payment.username} mono />
-                                            <DetailCell label="Cédula / Documento" value={payment.client_document} mono />
-                                            <DetailCell label="Teléfono del cliente" value={payment.client_phone} mono />
+                                            <DetailCell label="Cédula / RIF" value={payment.client_document} mono />
+                                            <DetailCell label="Teléfono cliente" value={payment.client_phone} mono />
                                             <DetailCell label="Correo" value={payment.client_email} />
+                                            <DetailCell label="Dirección" value={payment.client_address} />
+                                            <DetailCell label="Plan" value={payment.plan} />
+                                            <DetailCell label="Nodo / Zona" value={payment.node} />
+                                            <DetailCell label="Estado del servicio" value={payment.client_status} />
                                             <DetailCell label="Servicio" value={hasValue(payment.service_id) ? `#${payment.service_id}` : ''} mono />
                                             <DetailCell label="Factura" value={hasValue(payment.invoice_id) ? `#${payment.invoice_id}` : ''} mono />
                                             <DetailCell label="ID de pago" value={payment.payment_id} mono />
                                             <DetailCell label="Referencia reportada" value={payment.reference} mono />
-                                            <DetailCell label="Monto" value={formatAmount(payment.amount, payment.currency)} />
+                                            <DetailCell label="Monto reportado" value={formatAmount(payment.amount, payment.currency)} />
                                             <DetailCell label="Fecha del pago" value={payment.payment_date} mono />
                                             <DetailCell label="Fecha de validación" value={formatDateTime(payment.created_at)} />
                                             <DetailCell label="Modalidad" value={modality} />
                                             <DetailCell label="Método registrado" value={payment.registered_method} />
                                             <DetailCell label="Banco de origen" value={bank} />
                                             <DetailCell label="Teléfono emisor" value={payment.payer_phone} mono />
-                                            <DetailCell label="Referencia confirmada por Banesco" value={payment.banesco_reference} mono />
-                                            <DetailCell label="Monto confirmado por Banesco" value={bankAmount} />
-                                            <DetailCell label="Fecha Banesco" value={payment.banesco_date} mono />
-                                            <DetailCell label="Concepto Banesco" value={payment.banesco_concept} />
-                                            <DetailCell label="Estado Banesco" value={humanStatus(payment.banesco_status, 'Validado')} />
-                                            <DetailCell label="Registro de factura" value={humanStatus(payment.wisphub_status, 'Registrado')} />
+                                            <DetailCell label="Referencia confirmada" value={payment.banesco_reference} mono />
+                                            <DetailCell label="Monto confirmado" value={bankAmount} />
+                                            <DetailCell label="Fecha bancaria" value={payment.banesco_date} mono />
+                                            <DetailCell label="Concepto bancario" value={payment.banesco_concept} />
+                                            <DetailCell label="Estado de validación" value={humanStatus(payment.banesco_status, 'Validado')} />
+                                            <DetailCell label="Estado de registro" value={humanStatus(payment.wisphub_status, 'Registrado')} />
                                             <DetailCell label="ID de tarea" value={payment.wisphub_task_id} mono />
                                             <DetailCell label="Registro interno" value={payment.id} mono />
                                         </div>
