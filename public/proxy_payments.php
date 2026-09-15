@@ -44,7 +44,7 @@ const MIME_TYPES = [
 function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago, $totalCobrado, $nombreUser) {
     // Según Swagger docs: POST /api/facturas/registrar-pago/{id_factura}/
     $url = 'https://api.wisphub.app/api/facturas/registrar-pago/' . $facturaId . '/';
-    
+
     $payload = [
         'referencia'    => $referencia,
         'fecha_pago'    => $fechaPago,
@@ -52,7 +52,7 @@ function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago
         'accion'        => 1, // 1 = Registrar pago y activar el servicio
         'forma_pago'    => (int)$formaPago
     ];
-    
+
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -187,25 +187,57 @@ try {
     // Si la forma de pago es transferencia (u otra cuenta Banesco vinculada), validamos primero.
     if ($formaPagoId === 16749) {
         require_once __DIR__ . '/banesco_api.php';
-        
+
         $montoEnviado = $_POST['amount'] ?? 0;
-        
-        $banescoResponse = BanescoAPI::checkTransaction($datos['referencia']);
-        
+        $fechaBanesco = substr(trim((string)$datos['fecha_pago']), 0, 10);
+
+        // Pago Móvil Banesco -> Banesco puede no requerir que el usuario elija
+        // banco de origen. En ese caso usamos el código Banesco certificado.
+        $bankId = preg_replace('/\D+/', '', (string)($_POST['banco_origen'] ?? ''));
+        if ($bankId === '') {
+            $bankId = '0134';
+        } elseif (strlen($bankId) > 4) {
+            $bankId = substr($bankId, -4);
+        } else {
+            $bankId = str_pad($bankId, 4, '0', STR_PAD_LEFT);
+        }
+
+        $phoneNum = preg_replace('/\D+/', '', (string)($_POST['phone_emisor'] ?? ''));
+        if (strlen($phoneNum) === 11 && str_starts_with($phoneNum, '0')) {
+            $phoneNum = '58' . substr($phoneNum, 1);
+        } elseif (strlen($phoneNum) === 10) {
+            $phoneNum = '58' . $phoneNum;
+        }
+
+        $banescoOptions = [
+            'amount' => (float)$montoEnviado,
+            'paymentDate' => $fechaBanesco,
+            'bankId' => $bankId,
+        ];
+        if ($phoneNum !== '') {
+            $banescoOptions['phoneNum'] = $phoneNum;
+        }
+
+        $banescoResponse = BanescoAPI::checkTransaction(
+            $datos['referencia'],
+            'J402638850',
+            $banescoOptions
+        );
+
         if (!$banescoResponse['success']) {
             throw new Exception("Banesco: " . $banescoResponse['message']);
         }
-        
+
         // Banesco OK -> Usamos registrar-pago con accion=1
         $resultado = registrarPagoAutorizado(
-             $datos['factura_id'], 
-             $datos['referencia'], 
-             $datos['fecha_pago'], 
-             $datos['forma_pago'], 
-             $montoEnviado, 
+             $datos['factura_id'],
+             $datos['referencia'],
+             $datos['fecha_pago'],
+             $datos['forma_pago'],
+             $montoEnviado,
              $datos['nombre_usuario']
         );
-        
+
         appendPaymentAudit([
             'source' => 'portal',
             'client_name' => $datos['nombre_usuario'],
