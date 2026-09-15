@@ -335,9 +335,13 @@ async def handle_promise_flow(numero_cliente, state, mensaje):
         await bot.enviar_whatsapp(numero_cliente, "⌛ *Registrando promesa...*")
         try:
             await bot.register_promise(state["identity"], data["invoice"], data["deadline"])
-        except Exception as exc:
+        except Exception:
             bot.logger.exception("No se pudo registrar promesa")
-            await bot.enviar_whatsapp(numero_cliente, f"⚠️ No pude registrar la promesa en WispHub.\nDetalle: {exc}")
+            await bot.enviar_whatsapp(
+                numero_cliente,
+                "⚠️ *No fue posible registrar la promesa de pago en este momento.*\n\n"
+                "Por favor, intenta nuevamente en unos minutos. Si el problema continúa, comunícate con soporte técnico.",
+            )
             bot.reset_to_client_menu(state)
             return
 
@@ -356,28 +360,25 @@ async def handle_promise_flow(numero_cliente, state, mensaje):
                 "✅ *¡Promesa de pago registrada!*",
                 f"📄 Factura: #{bot.invoice_display(data['invoice'])}",
                 f"📅 Fecha límite: {deadline_display}",
-                "⚡ Tu servicio será reactivado en minutos",
+                "⚡ Tu servicio será reactivado en minutos.",
                 "",
-                "Recuerda realizar el pago antes de la fecha límite.",
-                "Escribe *menu* para volver al menú.",
+                "Escribe *MENU* para volver al menú.",
             ]),
         )
         bot.reset_to_client_menu(state)
         return
 
+    await bot.handle_promise_flow(numero_cliente, state, mensaje)
 
-async def process_user_message(numero_cliente, mensaje):
-    state_key = bot.normalize_phone(numero_cliente) or str(numero_cliente)
-    raw_message = str(mensaje or "").strip()
-    message = raw_message.lower()
-    if not message:
+
+async def process_user_message(numero_cliente: str, mensaje: str):
+    numero_cliente = bot.normalize_phone(numero_cliente)
+    if not numero_cliente:
         return
 
-    state = bot.state_for(state_key)
+    state = bot.SESSIONS.setdefault(numero_cliente, bot.new_session())
+    message = bot.normalize_text(mensaje)
 
-    # "Hola" siempre reinicia completamente la conversación y borra la
-    # identidad/flujo anterior. MENU/VOLVER mantienen el acceso rápido al menú
-    # del cliente cuando ya existe una identidad válida.
     if message.startswith("hola"):
         state["mode"] = "START"
         state["identity"] = None
@@ -385,54 +386,62 @@ async def process_user_message(numero_cliente, mensaje):
         await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
         return
 
-    if message in {"menu", "menú", "volver", "inicio"} or message.startswith("buenas"):
+    if message in {"menu", "inicio", "start"}:
         if state.get("identity"):
-            await bot.show_client_menu(numero_cliente, state, state["identity"])
+            bot.reset_to_client_menu(state)
+            await bot.enviar_whatsapp(numero_cliente, bot.MAIN_MENU.format(name=bot.display_name(state["identity"])))
         else:
             state["mode"] = "START"
-            state["identity"] = None
             state["data"] = {}
             await bot.enviar_whatsapp(numero_cliente, bot.MENU_BIENVENIDA)
         return
 
-    if state["mode"] == "START" and message == "1":
-        state["mode"] = "CLIENT_USERNAME"
-        state["data"] = {}
-        await bot.enviar_whatsapp(
-            numero_cliente,
-            "👤 Escribe el *usuario asignado en WiFi Rapidito*.\n\nEjemplo: *normaavila*",
-        )
+    mode = state["mode"]
+
+    if mode == "START":
+        if bot.is_yes(mensaje):
+            identity = await bot.find_client_by_whatsapp_phone(numero_cliente)
+            if identity:
+                await bot.show_client_menu(numero_cliente, state, identity)
+            else:
+                state["mode"] = "ASK_USERNAME"
+                await bot.enviar_whatsapp(
+                    numero_cliente,
+                    "No pude identificar este WhatsApp automáticamente.\n\nEscribe tu *usuario de acceso* para continuar.",
+                )
+            return
+        if bot.is_no(mensaje):
+            state["mode"] = "ASK_USERNAME"
+            await bot.enviar_whatsapp(numero_cliente, "Escribe tu *usuario de acceso* de WispHub.")
+            return
+        await bot.enviar_whatsapp(numero_cliente, "Responde *Sí* o *No* para continuar.")
         return
 
-    if state["mode"] == "CLIENT_USERNAME":
-        await bot.enviar_whatsapp(numero_cliente, "🔍 *Buscando tu cuenta...*")
-        identity = await find_client_by_username(raw_message)
-        if not identity:
+    if mode == "ASK_USERNAME":
+        identity = await find_client_by_username(mensaje)
+        if identity:
+            await bot.show_client_menu(numero_cliente, state, identity)
+        else:
             await bot.enviar_whatsapp(
                 numero_cliente,
-                "⚠️ No encontré ese usuario en WispHub. Verifica cómo está escrito e inténtalo nuevamente o escribe *MENU*.",
+                "No encontré ese usuario. Verifica que esté escrito correctamente o escribe *MENU* para empezar de nuevo.",
             )
-            return
-        state["identity"] = identity
-        bot.reset_to_client_menu(state)
-        status = str(identity.get("status") or "").lower()
-        status_label = "🟢 Activo" if "activ" in status else ("🔴 Suspendido" if "suspend" in status or "cort" in status else identity.get("status") or "Sin estado")
-        await bot.enviar_whatsapp(
-            numero_cliente,
-            f"✅ *¡Te encontré!*\n\n👤 {bot.display_name(identity)}\n📡 Estado: {status_label}",
-        )
-        await bot.enviar_whatsapp(numero_cliente, bot.MAIN_MENU.format(name=bot.display_name(identity)))
         return
 
-    await _original_process_user_message(numero_cliente, raw_message)
+    if mode.startswith("PAYMENT_"):
+        await handle_payment_flow(numero_cliente, state, mensaje)
+        return
+    if mode.startswith("PROMISE_"):
+        await handle_promise_flow(numero_cliente, state, mensaje)
+        return
+
+    if mode == "CLIENT_MENU" and message == "10":
+        await start_promise(numero_cliente, state)
+        return
+
+    await _original_process_user_message(numero_cliente, mensaje)
 
 
-# Sustituimos únicamente las piezas conversacionales. Las integraciones reales
-# siguen viviendo en bot_logic.py y son las mismas que usa el portal.
-bot.show_service_status = show_service_status
-bot.handle_payment_flow = handle_payment_flow
-bot.start_promise = start_promise
-bot.handle_promise_flow = handle_promise_flow
 bot.process_user_message = process_user_message
-
-app = bot.app
+bot.handle_payment_flow = handle_payment_flow
+bot.handle_promise_flow = handle_promise_flow
