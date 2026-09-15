@@ -243,17 +243,39 @@ try {
              $datos['nombre_usuario']
         );
 
+        $paymentTypeLabel = trim((string)($_POST['payment_type_label'] ?? ''));
+        $bankName = trim((string)($_POST['banco_origen_nombre'] ?? ''));
+        if ($bankName === '' && $bankId === '0134') {
+            $bankName = 'Banesco';
+        }
+
         appendPaymentAudit([
             'source' => 'portal',
-            'client_name' => $datos['nombre_usuario'],
-            'username' => $datos['nombre_usuario'],
+            'client_name' => trim((string)($_POST['client_name'] ?? $datos['nombre_usuario'])),
+            'username' => trim((string)($_POST['username'] ?? $datos['nombre_usuario'])),
+            'client_id' => trim((string)($_POST['client_id'] ?? '')),
+            'client_document' => trim((string)($_POST['client_document'] ?? '')),
+            'client_phone' => trim((string)($_POST['client_phone'] ?? ($_POST['phone'] ?? ''))),
+            'client_email' => trim((string)($_POST['client_email'] ?? '')),
+            'service_id' => trim((string)($_POST['id_servicio'] ?? '')),
             'invoice_id' => $datos['factura_id'],
+            'payment_id' => trim((string)($_POST['payment_id'] ?? '')),
             'reference' => $datos['referencia'],
             'amount' => $montoEnviado,
             'currency' => 'VES',
             'payment_date' => $datos['fecha_pago'],
-            'method' => 'Transferencia Banesco',
+            'payment_time' => trim((string)($_POST['payment_time'] ?? '')),
+            'payment_type' => trim((string)($_POST['payment_type'] ?? '')),
+            'payment_type_label' => $paymentTypeLabel,
+            'method' => $paymentTypeLabel !== '' ? $paymentTypeLabel : 'Transferencia Banesco',
+            'bank_id' => $bankId,
+            'bank_name' => $bankName,
+            'payer_phone' => trim((string)($_POST['phone_emisor'] ?? '')),
             'banesco_status' => 'validated',
+            'banesco_reference' => trim((string)($banescoResponse['refNum'] ?? $datos['referencia'])),
+            'banesco_amount' => is_numeric($banescoResponse['amount'] ?? null) ? (float)$banescoResponse['amount'] : (float)$montoEnviado,
+            'banesco_date' => trim((string)($banescoResponse['date'] ?? '')),
+            'banesco_concept' => trim((string)($banescoResponse['concept'] ?? '')),
             'wisphub_status' => 'registered',
             'wisphub_task_id' => $resultado['task_id'] ?? '',
         ]);
