@@ -45,17 +45,23 @@ jobs:
           archive=""
           while IFS= read -r candidate; do
             [ -n "$candidate" ] || continue
-            if tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q 'BANESCO_API_PROD' \
-              && tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q "'referenceNumber'" \
-              && tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q "'accountId'" \
-              && tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q 'BANESCO_CLIENT_ID_PROD'; then
+            source="$(mktemp)"
+            tar -xOf "$candidate" banesco_api.php > "$source" 2>/dev/null || { rm -f "$source"; continue; }
+            if grep -q 'BANESCO_API_PROD' "$source" \
+              && grep -q "'referenceNumber'" "$source" \
+              && grep -q "'accountId'" "$source" \
+              && grep -Eq "define\([[:space:]]*['\"]BANESCO_CLIENT_ID_PROD['\"]" "$source" \
+              && grep -Eq "define\([[:space:]]*['\"]BANESCO_CLIENT_SECRET_PROD['\"]" "$source" \
+              && grep -q "'grant_type'[[:space:]]*=>[[:space:]]*'password'" "$source"; then
               archive="$candidate"
+              rm -f "$source"
               break
             fi
+            rm -f "$source"
           done < "$list"
           rm -f "$list"
-          test -n "$archive" || { echo 'certified_backup_found=no'; exit 2; }
-          echo 'certified_backup_found=yes'
+          test -n "$archive" || { echo 'certified_legacy_backup_found=no'; exit 2; }
+          echo 'certified_legacy_backup_found=yes'
 
           stamp="$(date +%Y%m%d-%H%M%S)"
           if [ -f "$BASE/banesco_api.php" ]; then cp "$BASE/banesco_api.php" "$BASE/.portal-backups/banesco-pre-postguard-$stamp.php"; fi
@@ -64,9 +70,11 @@ jobs:
           grep -q 'BANESCO_API_PROD' "$BASE/banesco_api.php.next"
           grep -q "'referenceNumber'" "$BASE/banesco_api.php.next"
           grep -q "'accountId'" "$BASE/banesco_api.php.next"
+          grep -Eq "define\([[:space:]]*['\"]BANESCO_CLIENT_ID_PROD['\"]" "$BASE/banesco_api.php.next"
           mv "$BASE/banesco_api.php.next" "$BASE/banesco_api.php"
           echo 'prod_validator_restored=yes'
 
+          cd "$BASE"
           php <<'PHP'
           <?php
           try {
