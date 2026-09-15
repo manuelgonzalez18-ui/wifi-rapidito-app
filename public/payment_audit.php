@@ -6,6 +6,9 @@ header('Content-Type: application/json; charset=UTF-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('X-Content-Type-Options: nosniff');
 
+define('PAYMENT_AUDIT_VERSION', '1.5-payment-audit-paid-invoices');
+define('PAYMENT_AUDIT_COMPAT_VERSION', '1.4-payment-audit-30d-all-sources');
+
 function auditRespond($status, $payload) {
     http_response_code($status);
     echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -15,7 +18,11 @@ function auditRespond($status, $payload) {
 require_once __DIR__ . '/payment_audit_lib.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    auditRespond(200, ['status' => 'ready', 'version' => '1.4-payment-audit-30d-all-sources']);
+    auditRespond(200, [
+        'status' => 'ready',
+        'version' => PAYMENT_AUDIT_VERSION,
+        'compat_version' => PAYMENT_AUDIT_COMPAT_VERSION,
+    ]);
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -88,10 +95,9 @@ function auditTimestamp($row) {
     return false;
 }
 
-function wisphubGetPaymentsPage($offset, $limit) {
+function wisphubFetchJson($url) {
     require_once __DIR__ . '/config_wisphub.php';
 
-    $url = rtrim(WISPHUB_API_URL, '/') . '/pagos/?limit=' . (int)$limit . '&offset=' . (int)$offset;
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -100,7 +106,7 @@ function wisphubGetPaymentsPage($offset, $limit) {
             'Accept: application/json',
         ],
         CURLOPT_CONNECTTIMEOUT => 6,
-        CURLOPT_TIMEOUT => 20,
+        CURLOPT_TIMEOUT => 25,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_FOLLOWLOCATION => true,
@@ -110,24 +116,131 @@ function wisphubGetPaymentsPage($offset, $limit) {
     $body = curl_exec($ch);
     $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $errno = curl_errno($ch);
+    $curlError = curl_error($ch);
     curl_close($ch);
 
-    if ($errno !== 0 || $httpCode < 200 || $httpCode >= 300 || !$body) return null;
+    if ($errno !== 0 || $httpCode < 200 || $httpCode >= 300 || !$body) {
+        return [
+            'ok' => false,
+            'data' => null,
+            'http_code' => $httpCode,
+            'error' => $curlError !== '' ? $curlError : ('HTTP ' . $httpCode),
+        ];
+    }
 
     $data = json_decode($body, true);
-    return is_array($data) ? $data : null;
+    if (!is_array($data)) {
+        return [
+            'ok' => false,
+            'data' => null,
+            'http_code' => $httpCode,
+            'error' => 'Respuesta JSON inválida',
+        ];
+    }
+
+    return [
+        'ok' => true,
+        'data' => $data,
+        'http_code' => $httpCode,
+        'error' => '',
+    ];
 }
 
-function wisphubRecentPayments($days = 30) {
-    $cutoff = strtotime('-' . max(1, (int)$days) . ' days');
+function wisphubGetPaidInvoicesPage($offset, $limit, $fromDate, $toDate) {
+    require_once __DIR__ . '/config_wisphub.php';
+
+    // WispHub documenta /api/facturas/ como el recurso de consulta de pagos:
+    // estado=2 (Pagada) + rango de fecha_pago. /api/pagos/ no forma parte del
+    // contrato público y puede responder vacío/404, que era la causa del panel en cero.
+    $bases = array_values(array_unique([
+        'https://api.wisphub.net/api',
+        rtrim(WISPHUB_API_URL, '/'),
+    ]));
+
+    $query = http_build_query([
+        'estado' => 2,
+        'fecha_pago__range_0' => $fromDate,
+        'fecha_pago__range_1' => $toDate,
+        'limit' => (int)$limit,
+        'offset' => (int)$offset,
+    ]);
+
+    $lastError = 'No fue posible consultar WispHub.';
+    foreach ($bases as $base) {
+        $url = rtrim($base, '/') . '/facturas/?' . $query;
+        $result = wisphubFetchJson($url);
+        if ($result['ok']) {
+            return [
+                'data' => $result['data'],
+                'base' => $base,
+                'error' => '',
+            ];
+        }
+        $lastError = 'WispHub ' . ($result['error'] ?? 'no disponible');
+    }
+
+    return [
+        'data' => null,
+        'base' => '',
+        'error' => $lastError,
+    ];
+}
+
+function invoiceServiceId($row) {
+    if (!is_array($row)) return '';
+
+    foreach (['id_servicio', 'servicio_id'] as $key) {
+        if (isset($row[$key]) && $row[$key] !== '') return (string)$row[$key];
+    }
+
+    $service = $row['servicio'] ?? null;
+    $serviceId = auditScalar($service, ['id_servicio', 'id']);
+    if ($serviceId !== '') return $serviceId;
+
+    $articles = is_array($row['articulos'] ?? null) ? $row['articulos'] : [];
+    foreach ($articles as $article) {
+        if (!is_array($article)) continue;
+        $serviceId = auditScalar($article['servicio'] ?? null, ['id_servicio', 'id']);
+        if ($serviceId !== '') return $serviceId;
+        foreach (['id_servicio', 'servicio_id'] as $key) {
+            if (isset($article[$key]) && $article[$key] !== '') return (string)$article[$key];
+        }
+    }
+
+    return '';
+}
+
+function wisphubRecentPayments($days = 30, &$diagnostic = null) {
+    $days = max(1, (int)$days);
+    $fromDate = date('Y-m-d', strtotime('-' . $days . ' days'));
+    $toDate = date('Y-m-d');
+    $cutoff = strtotime($fromDate . ' 00:00:00');
     $pageSize = 300;
     $offset = 0;
     $out = [];
     $maxPages = 20;
 
+    $diagnostic = [
+        'status' => 'ok',
+        'source' => 'facturas',
+        'base' => '',
+        'pages' => 0,
+        'error' => '',
+    ];
+
     for ($page = 0; $page < $maxPages; $page++) {
-        $data = wisphubGetPaymentsPage($offset, $pageSize);
-        if ($data === null) break;
+        $pageResult = wisphubGetPaidInvoicesPage($offset, $pageSize, $fromDate, $toDate);
+        $data = $pageResult['data'];
+        if ($data === null) {
+            if ($page === 0) {
+                $diagnostic['status'] = 'error';
+                $diagnostic['error'] = $pageResult['error'];
+            }
+            break;
+        }
+
+        $diagnostic['base'] = $pageResult['base'];
+        $diagnostic['pages'] += 1;
 
         $rows = is_array($data['results'] ?? null) ? $data['results'] : (array_is_list($data) ? $data : []);
         if (!$rows) break;
@@ -135,17 +248,16 @@ function wisphubRecentPayments($days = 30) {
         foreach ($rows as $row) {
             if (!is_array($row)) continue;
 
-            $dateRaw = $row['fecha_pago'] ?? $row['fecha'] ?? $row['fecha_creacion'] ?? $row['created_at'] ?? $row['fecha_registro'] ?? '';
+            $dateRaw = $row['fecha_pago'] ?? '';
             $ts = $dateRaw ? strtotime((string)$dateRaw) : false;
             if ($ts === false || $ts < $cutoff) continue;
 
-            $paymentId = trim((string)($row['id_pago'] ?? $row['id'] ?? $row['pk'] ?? ''));
-            $reference = trim((string)($row['referencia'] ?? $row['reference'] ?? $row['numero_referencia'] ?? $row['nro_referencia'] ?? $row['comprobante'] ?? ''));
+            $invoiceId = trim((string)($row['id_factura'] ?? $row['folio'] ?? $row['id'] ?? ''));
+            $paymentId = trim((string)($row['id_pago'] ?? ''));
+            $reference = trim((string)($row['referencia'] ?? $row['reference'] ?? $row['numero_referencia'] ?? $row['nro_referencia'] ?? ''));
 
-            $client = $row['cliente'] ?? $row['client'] ?? $row['usuario'] ?? $row['user'] ?? $row['abonado'] ?? '';
-            $invoice = $row['factura'] ?? $row['invoice'] ?? $row['id_factura'] ?? '';
-            $service = $row['servicio'] ?? $row['service'] ?? $row['id_servicio'] ?? '';
-            $method = $row['forma_pago'] ?? $row['metodo_pago'] ?? $row['payment_method'] ?? $row['tipo_pago'] ?? '';
+            $client = $row['cliente'] ?? $row['client'] ?? $row['usuario'] ?? $row['user'] ?? '';
+            $method = $row['forma_pago'] ?? $row['metodo_pago'] ?? $row['payment_method'] ?? '';
             $amount = $row['total_cobrado'] ?? $row['monto'] ?? $row['cantidad'] ?? $row['total'] ?? $row['importe'] ?? null;
 
             $clientName = auditScalar($client, ['nombre', 'name', 'cliente', 'razon_social']);
@@ -153,13 +265,11 @@ function wisphubRecentPayments($days = 30) {
                 $clientName = trim((string)($row['nombre_cliente'] ?? $row['cliente_nombre'] ?? $row['nombre'] ?? ''));
             }
 
-            $invoiceId = auditScalar($invoice, ['id_factura', 'id']);
-            if ($invoiceId === '') $invoiceId = trim((string)($row['factura_id'] ?? ''));
-
-            $serviceId = auditScalar($service, ['id_servicio', 'id']);
-            if ($serviceId === '') $serviceId = trim((string)($row['servicio_id'] ?? ''));
-
-            $stableId = $paymentId !== '' ? $paymentId : sha1(json_encode([$reference, $dateRaw, $clientName, $amount]));
+            $username = auditScalar($client, ['usuario', 'username']);
+            $serviceId = invoiceServiceId($row);
+            $stableId = $paymentId !== ''
+                ? $paymentId
+                : ($invoiceId !== '' ? ('invoice-' . $invoiceId) : sha1(json_encode([$reference, $dateRaw, $clientName, $amount])));
 
             $out[] = [
                 'id' => 'wisphub-' . $stableId,
@@ -167,7 +277,7 @@ function wisphubRecentPayments($days = 30) {
                 'created_at' => date('c', $ts),
                 'source' => 'wisphub_history',
                 'client_name' => $clientName,
-                'username' => auditScalar($client, ['usuario', 'username']),
+                'username' => $username,
                 'service_id' => $serviceId,
                 'invoice_id' => $invoiceId,
                 'reference' => $reference,
@@ -209,10 +319,10 @@ if (is_file($path)) {
     }
 }
 
-// Every source is limited to the same 30-day window: Portal, WhatsApp bot and
-// WispHub history. Local audit entries are merged first so they preserve their
-// precise source when the same payment also appears in WispHub.
-$recent = wisphubRecentPayments($days);
+// Local Portal/Bot records preserve their exact source; WispHub paid invoices
+// backfill every other payment registered during the same 30-day period.
+$wisphubDiagnostic = null;
+$recent = wisphubRecentPayments($days, $wisphubDiagnostic);
 $seen = [];
 $merged = [];
 foreach (array_merge($items, $recent) as $row) {
@@ -223,10 +333,12 @@ foreach (array_merge($items, $recent) as $row) {
     $amount = strtolower(trim((string)($row['amount'] ?? '')));
     $paymentId = strtolower(trim((string)($row['payment_id'] ?? '')));
 
-    // Prefer a composite payment identity so a Portal/Bot audit row suppresses
-    // the duplicate WispHub historical row while keeping the original source.
+    // Prefer invoice/reference/date/amount so the local audit row wins over the
+    // WispHub backfill row for the same operation and its source stays accurate.
     $composite = $invoiceId . '|' . $reference . '|' . $paymentDate . '|' . $amount;
-    $key = trim($composite, '|') !== '' ? 'cmp:' . $composite : 'id:' . ($paymentId !== '' ? $paymentId : strtolower((string)($row['id'] ?? '')));
+    $key = trim($composite, '|') !== ''
+        ? 'cmp:' . $composite
+        : 'id:' . ($paymentId !== '' ? $paymentId : strtolower((string)($row['id'] ?? '')));
     if ($key === 'id:' || isset($seen[$key])) continue;
     $seen[$key] = true;
     $merged[] = $row;
@@ -254,5 +366,9 @@ auditRespond(200, [
     'count' => count($merged),
     'historical_days' => $days,
     'source_counts' => $sourceCounts,
-    'version' => '1.4-payment-audit-30d-all-sources',
+    'wisphub_count' => count($recent),
+    'wisphub_status' => $wisphubDiagnostic['status'] ?? 'unknown',
+    'wisphub_source' => $wisphubDiagnostic['source'] ?? 'facturas',
+    'version' => PAYMENT_AUDIT_VERSION,
+    'compat_version' => PAYMENT_AUDIT_COMPAT_VERSION,
 ]);
