@@ -6,7 +6,7 @@ header('Content-Type: application/json; charset=UTF-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('X-Content-Type-Options: nosniff');
 
-define('VALIDATED_PAYMENTS_VERSION', '1.1-real-client-full-details');
+define('VALIDATED_PAYMENTS_VERSION', '1.2-real-client-invoice-fallback');
 
 function vpRespond($status, $payload) {
     http_response_code($status);
@@ -249,6 +249,22 @@ function vpNormalizeInvoice($row) {
     ];
 }
 
+function vpLoadInvoiceById($invoiceId) {
+    $invoiceId = preg_replace('/\D+/', '', (string)$invoiceId);
+    if ($invoiceId === '') return null;
+
+    $bases = array_values(array_unique(['https://api.wisphub.net/api', rtrim(WISPHUB_API_URL, '/')]));
+    foreach ($bases as $base) {
+        $result = vpFetchJson(rtrim($base, '/') . '/facturas/' . rawurlencode($invoiceId) . '/');
+        if (!$result['ok'] || !is_array($result['data'])) continue;
+        $candidate = vpNormalizeInvoice($result['data']);
+        if (!is_array($candidate)) continue;
+        if (empty($candidate['invoice_id'])) $candidate['invoice_id'] = $invoiceId;
+        return $candidate;
+    }
+    return null;
+}
+
 function vpLoadPaidInvoices($days, &$meta) {
     $from = date('Y-m-d', strtotime('-' . max(1, (int)$days) . ' days'));
     $to = date('Y-m-d');
@@ -447,8 +463,28 @@ foreach ($candidates as $index => $candidate) {
 
 $enrichedCount = 0;
 $resolvedCount = 0;
+$directInvoiceCount = 0;
+$invoiceLookupCache = [];
 foreach ($payments as $index => $payment) {
     $candidate = vpPickCandidate($payment, $candidates);
+
+    // Una validación Banesco puede quedar sin registrar en WispHub (por ejemplo, por un 404).
+    // En ese caso la factura aún no está en el conjunto estado=2. Resolvemos el cliente
+    // directamente por el ID de factura, sin exigir que la factura esté pagada.
+    if ($candidate === null) {
+        $invoiceId = preg_replace('/\D+/', '', (string)($payment['invoice_id'] ?? ''));
+        if ($invoiceId !== '') {
+            if (!array_key_exists($invoiceId, $invoiceLookupCache)) {
+                $direct = vpLoadInvoiceById($invoiceId);
+                $invoiceLookupCache[$invoiceId] = is_array($direct)
+                    ? vpEnrichCandidateWithClient($direct, $clients)
+                    : null;
+            }
+            $candidate = $invoiceLookupCache[$invoiceId];
+            if ($candidate !== null) $directInvoiceCount++;
+        }
+    }
+
     $payments[$index] = vpEnrichPayment($payment, $candidate);
     if ($candidate !== null) $enrichedCount++;
     if (!empty($payments[$index]['client_resolved'])) $resolvedCount++;
@@ -472,6 +508,7 @@ vpRespond(200, [
     'source_counts' => $sourceCounts,
     'enriched_count' => $enrichedCount,
     'resolved_clients' => $resolvedCount,
+    'direct_invoice_enrichment' => $directInvoiceCount,
     'invoice_enrichment' => $invoiceMeta,
     'client_enrichment' => $clientMeta,
     'version' => VALIDATED_PAYMENTS_VERSION,
