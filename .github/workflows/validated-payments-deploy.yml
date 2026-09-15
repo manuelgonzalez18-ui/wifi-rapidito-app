@@ -1,6 +1,14 @@
 name: Validated Payments Deploy
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'public/validated_payments.php'
+      - 'public/payment_audit_lib.php'
+      - 'public/proxy_payments.php'
+      - 'src/pages/Staff/ValidatedPayments.jsx'
+      - '.github/workflows/validated-payments-deploy.yml'
   push:
     branches: [main]
     paths:
@@ -31,6 +39,7 @@ jobs:
           php -l public/proxy_payments.php
 
       - name: Configure Hostinger SSH
+        if: github.event_name == 'push'
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -48,6 +57,7 @@ jobs:
           ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Deploy validated payments endpoint
+        if: github.event_name == 'push'
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
@@ -62,6 +72,7 @@ jobs:
             "php -l '$REMOTE_BASE/validated_payments.php.next' >/dev/null && mv '$REMOTE_BASE/validated_payments.php.next' '$REMOTE_BASE/validated_payments.php'"
 
       - name: Verify public endpoint health
+        if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -77,7 +88,7 @@ jobs:
           exit 1
 
       - name: Publish deployment status
-        if: success()
+        if: success() && github.event_name == 'push'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
