@@ -59,6 +59,7 @@ jobs:
           php -l public/staff_auth.php
           php -l public/support_dashboard.php
           php -l public/staff_clients.php
+          php -l public/banesco_api.php
           php -l public/proxy_payments.php
           php -l public/payment_audit.php
           php -l public/payment_audit_lib.php
@@ -129,7 +130,7 @@ jobs:
             echo "Created frontend backup: frontend-$stamp.tar.gz"
           fi
           backend_items=()
-          for file in login_wisphub.php staff_auth.php support_dashboard.php staff_clients.php proxy_payments.php payment_audit.php payment_audit_lib.php; do
+          for file in login_wisphub.php staff_auth.php support_dashboard.php staff_clients.php banesco_api.php proxy_payments.php payment_audit.php payment_audit_lib.php; do
             [[ -f "$file" ]] && backend_items+=("$file")
           done
           if (( ${#backend_items[@]} > 0 )); then
@@ -150,7 +151,7 @@ jobs:
           set -euo pipefail
           REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
 
-          for file in login_wisphub.php staff_auth.php support_dashboard.php staff_clients.php proxy_payments.php payment_audit.php payment_audit_lib.php; do
+          for file in login_wisphub.php staff_auth.php support_dashboard.php staff_clients.php banesco_api.php proxy_payments.php payment_audit.php payment_audit_lib.php; do
             test -s "dist/$file"
           done
           test -s "dist/.htaccess"
@@ -159,7 +160,7 @@ jobs:
             dist/assets/. \
             "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/assets/"
 
-          for file in login_wisphub.php staff_auth.php support_dashboard.php staff_clients.php proxy_payments.php payment_audit.php payment_audit_lib.php; do
+          for file in login_wisphub.php staff_auth.php support_dashboard.php staff_clients.php banesco_api.php proxy_payments.php payment_audit.php payment_audit_lib.php; do
             scp -i ~/.ssh/hostinger_deploy -P 65002 \
               "dist/$file" \
               "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_BASE/$file.next"
@@ -191,7 +192,7 @@ jobs:
           set -euo pipefail
           REMOTE_BASE="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html"
           ssh -i ~/.ssh/hostinger_deploy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
-            "test -s '$REMOTE_BASE/index.html' && test -d '$REMOTE_BASE/assets' && test -s '$REMOTE_BASE/frontend-version.txt' && test -s '$REMOTE_BASE/login_wisphub.php' && test -s '$REMOTE_BASE/staff_auth.php' && test -s '$REMOTE_BASE/support_dashboard.php' && test -s '$REMOTE_BASE/staff_clients.php' && test -s '$REMOTE_BASE/proxy_payments.php' && test -s '$REMOTE_BASE/payment_audit.php' && test -s '$REMOTE_BASE/payment_audit_lib.php' && php -l '$REMOTE_BASE/login_wisphub.php' >/dev/null && php -l '$REMOTE_BASE/staff_auth.php' >/dev/null && php -l '$REMOTE_BASE/support_dashboard.php' >/dev/null && php -l '$REMOTE_BASE/staff_clients.php' >/dev/null && php -l '$REMOTE_BASE/proxy_payments.php' >/dev/null && php -l '$REMOTE_BASE/payment_audit.php' >/dev/null && php -l '$REMOTE_BASE/payment_audit_lib.php' >/dev/null && grep -q '/assets/' '$REMOTE_BASE/index.html' && grep -q '5.0-resilient' '$REMOTE_BASE/login_wisphub.php' && grep -q '2.1-admin-reset' '$REMOTE_BASE/staff_auth.php' && grep -q '1.2-support-offset-pagination' '$REMOTE_BASE/support_dashboard.php' && grep -q '1.1-staff-clients-offset' '$REMOTE_BASE/staff_clients.php' && echo 'Hostinger portal deployment verified.'"
+            "test -s '$REMOTE_BASE/index.html' && test -d '$REMOTE_BASE/assets' && test -s '$REMOTE_BASE/frontend-version.txt' && test -s '$REMOTE_BASE/login_wisphub.php' && test -s '$REMOTE_BASE/staff_auth.php' && test -s '$REMOTE_BASE/support_dashboard.php' && test -s '$REMOTE_BASE/staff_clients.php' && test -s '$REMOTE_BASE/banesco_api.php' && test -s '$REMOTE_BASE/proxy_payments.php' && test -s '$REMOTE_BASE/payment_audit.php' && test -s '$REMOTE_BASE/payment_audit_lib.php' && php -l '$REMOTE_BASE/login_wisphub.php' >/dev/null && php -l '$REMOTE_BASE/staff_auth.php' >/dev/null && php -l '$REMOTE_BASE/support_dashboard.php' >/dev/null && php -l '$REMOTE_BASE/staff_clients.php' >/dev/null && php -l '$REMOTE_BASE/banesco_api.php' >/dev/null && php -l '$REMOTE_BASE/proxy_payments.php' >/dev/null && php -l '$REMOTE_BASE/payment_audit.php' >/dev/null && php -l '$REMOTE_BASE/payment_audit_lib.php' >/dev/null && grep -q \"'startDt'\" '$REMOTE_BASE/banesco_api.php' && grep -q \"'phoneNum'\" '$REMOTE_BASE/banesco_api.php' && grep -q '/assets/' '$REMOTE_BASE/index.html' && grep -q '5.0-resilient' '$REMOTE_BASE/login_wisphub.php' && grep -q '2.1-admin-reset' '$REMOTE_BASE/staff_auth.php' && grep -q '1.2-support-offset-pagination' '$REMOTE_BASE/support_dashboard.php' && grep -q '1.1-staff-clients-offset' '$REMOTE_BASE/staff_clients.php' && echo 'Hostinger portal deployment verified.'"
 
       - name: Verify public Hostinger deployment
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -225,7 +226,7 @@ jobs:
               && grep -q '2.1-admin-reset' <<<"$STAFF_HEALTH" \
               && grep -qi 'clear-site-data:.*cache' <<<"$INDEX_HEADERS" \
               && grep -q '1.1-staff-clients-offset' <<<"$CLIENTS_HEALTH" \
-              && grep -q '1.0-payment-audit' <<<"$PAYMENT_AUDIT_HEALTH" \
+              && grep -q '1.4-payment-audit-30d-all-sources' <<<"$PAYMENT_AUDIT_HEALTH" \
               && [[ "$ASSETS_OK" == 1 ]]; then
               echo "Public Hostinger frontend, assets and portal backend verified."
               exit 0
