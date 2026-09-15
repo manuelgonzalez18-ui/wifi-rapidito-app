@@ -1,0 +1,137 @@
+name: Hostinger Payment Diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/hostinger-payment-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_diag
+          chmod 600 ~/.ssh/hostinger_diag
+          ssh-keygen -y -f ~/.ssh/hostinger_diag >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Inspect payment audit and backups without exposing customer data
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_diag -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' > payment_diagnostic.txt <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          PRIVATE="$HOME/domains/wifirapidito.com/.wifi-rapidito-private"
+          if [ ! -d "$PRIVATE" ]; then
+            PRIVATE="$HOME/domains/wifirapidito.com/public_html/../.wifi-rapidito-private"
+          fi
+
+          echo '=== LIVE FILES ==='
+          for f in banesco_api.php proxy_payments.php payment_audit.php payment_audit_lib.php; do
+            if [ -f "$BASE/$f" ]; then
+              printf '%s sha256=' "$f"
+              sha256sum "$BASE/$f" | awk '{print $1}'
+            else
+              echo "$f MISSING"
+            fi
+          done
+
+          echo '=== BANESCO CONTRACT MARKERS ==='
+          grep -nE "BANESCO_(SSO|API)|financial-account/transactions|'amount'|'startDt'|'bankId'|'phoneNum'|checkTransaction" "$BASE/banesco_api.php" 2>/dev/null \
+            | sed -E "s/(CLIENT_SECRET|CLIENT_ID)([^=]*=).*/\1\2***REDACTED***/Ig" \
+            | head -n 120 || true
+
+          echo '=== PORTAL PAYMENT MARKERS ==='
+          grep -nE "checkTransaction|appendPaymentAudit|phone_emisor|banco_origen|payment_date|ignore_banesco_auto" "$BASE/proxy_payments.php" 2>/dev/null | head -n 160 || true
+
+          echo '=== AUDIT STORE ==='
+          AUDIT="$(dirname "$BASE")/.wifi-rapidito-private/payment-audit.jsonl"
+          if [ ! -f "$AUDIT" ]; then
+            AUDIT="$BASE/../.wifi-rapidito-private/payment-audit.jsonl"
+          fi
+          if [ -f "$AUDIT" ]; then
+            echo 'audit_file=present'
+            printf 'audit_lines='; wc -l < "$AUDIT" | tr -d ' '
+            php -r '
+              $path=$argv[1]; $cut=time()-30*86400; $counts=["portal"=>0,"whatsapp_bot"=>0,"other"=>0,"recent"=>0,"invalid"=>0];
+              $fh=fopen($path,"r"); while(($line=fgets($fh))!==false){ $r=json_decode($line,true); if(!is_array($r)){ $counts["invalid"]++; continue; }
+                $src=$r["source"]??"other"; $ts=strtotime((string)($r["payment_date"]??$r["created_at"]??""));
+                if($ts!==false && $ts >= $cut){ $counts["recent"]++; if(isset($counts[$src])) $counts[$src]++; else $counts["other"]++; }
+              }
+              foreach($counts as $k=>$v) echo $k,"=",$v,PHP_EOL;
+            ' "$AUDIT"
+          else
+            echo 'audit_file=missing'
+          fi
+
+          echo '=== PRIVATE PAYMENT CONFIG SHAPE ==='
+          CONFIG="$(dirname "$BASE")/.wifi-rapidito-private/payment_secrets.php"
+          if [ -f "$CONFIG" ]; then
+            echo 'payment_secrets=present'
+            grep -oE "BANESCO_[A-Z0-9_]+" "$CONFIG" | sort -u || true
+          else
+            echo 'payment_secrets=missing'
+          fi
+
+          echo '=== AVAILABLE PAYMENT BACKUPS ==='
+          BACKUPS="$BASE/.portal-backups"
+          if [ -d "$BACKUPS" ]; then
+            find "$BACKUPS" -maxdepth 1 -type f \( -name 'payment-stack-*.tar.gz' -o -name 'portal-backend-*.tar.gz' \) -printf '%T@ %f\n' 2>/dev/null | sort -nr | head -n 25 | cut -d' ' -f2-
+          else
+            echo 'backup_dir=missing'
+          fi
+
+          echo '=== UNIQUE BACKUP BANESCO SHAPES ==='
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          if [ -d "$BACKUPS" ]; then
+            i=0
+            while IFS= read -r archive; do
+              [ -n "$archive" ] || continue
+              i=$((i+1))
+              [ "$i" -le 20 ] || break
+              rm -rf "$tmp/extract"; mkdir -p "$tmp/extract"
+              tar -xzf "$archive" -C "$tmp/extract" banesco_api.php proxy_payments.php 2>/dev/null || true
+              if [ -f "$tmp/extract/banesco_api.php" ]; then
+                sha="$(sha256sum "$tmp/extract/banesco_api.php" | awk '{print $1}')"
+                echo "archive=$(basename "$archive") banesco_sha=$sha"
+                grep -E "define\('BANESCO_(SSO|API)|financial-account/transactions|'amount'|'startDt'|'endDt'|'bankId'|'phoneNum'|checkTransaction" "$tmp/extract/banesco_api.php" 2>/dev/null \
+                  | sed -E "s/(CLIENT_SECRET|CLIENT_ID)([^=]*=).*/\1\2***REDACTED***/Ig" \
+                  | head -n 40 || true
+              fi
+              if [ -f "$tmp/extract/proxy_payments.php" ]; then
+                psha="$(sha256sum "$tmp/extract/proxy_payments.php" | awk '{print $1}')"
+                echo "proxy_sha=$psha"
+                grep -E "checkTransaction|phone_emisor|banco_origen|appendPaymentAudit|ignore_banesco_auto" "$tmp/extract/proxy_payments.php" 2>/dev/null | head -n 50 || true
+              fi
+            done < <(find "$BACKUPS" -maxdepth 1 -type f \( -name 'payment-stack-*.tar.gz' -o -name 'portal-backend-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 20 | cut -d' ' -f2-)
+          fi
+          REMOTE
+          cat payment_diagnostic.txt
+
+      - name: Upload diagnostic summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: hostinger-payment-diagnostic
+          path: payment_diagnostic.txt
+          retention-days: 1
