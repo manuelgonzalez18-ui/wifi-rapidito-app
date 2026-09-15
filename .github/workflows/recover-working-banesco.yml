@@ -1,0 +1,97 @@
+name: Recover Working Banesco Code
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/recover-working-banesco.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_recover
+          chmod 600 ~/.ssh/hostinger_recover
+          ssh-keygen -y -f ~/.ssh/hostinger_recover >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Extract most recent pre-regression production Banesco files
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REMOTE_DIR="/home/$HOSTINGER_USER/domains/wifirapidito.com/public_html/.portal-backups"
+          REMOTE_TMP="/tmp/rapidito-banesco-recovery-$GITHUB_RUN_ID"
+          ssh -i ~/.ssh/hostinger_recover -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" "bash -s" <<REMOTE
+          set -euo pipefail
+          mkdir -p "$REMOTE_TMP"
+          archive=""
+          for candidate in \$(find "$REMOTE_DIR" -maxdepth 1 -type f \( -name 'payment-stack-*.tar.gz' -o -name 'portal-backend-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | cut -d' ' -f2-); do
+            if tar -xOf "\$candidate" banesco_api.php 2>/dev/null | grep -q 'BANESCO_API_PROD'; then
+              archive="\$candidate"
+              break
+            fi
+          done
+          test -n "\$archive"
+          echo "Recovered from \$(basename "\$archive")"
+          tar -xOf "\$archive" banesco_api.php > "$REMOTE_TMP/banesco_api.php"
+          tar -xOf "\$archive" proxy_payments.php > "$REMOTE_TMP/proxy_payments.php"
+          REMOTE
+
+          scp -i ~/.ssh/hostinger_recover -P 65002 "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_TMP/banesco_api.php" recovered_banesco_api.php
+          scp -i ~/.ssh/hostinger_recover -P 65002 "$HOSTINGER_USER@$HOSTINGER_HOST:$REMOTE_TMP/proxy_payments.php" recovered_proxy_payments.php
+          ssh -i ~/.ssh/hostinger_recover -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" "rm -rf '$REMOTE_TMP'"
+
+      - name: Sanitize recovered source and print logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          def sanitize(text):
+              # Redact literal values only on lines that may contain credentials/tokens.
+              lines=[]
+              sensitive = re.compile(r'(CLIENT_SECRET|CLIENT_ID|API_KEY|PASSWORD|ACCESS_TOKEN|WISPHUB_API_KEY|EVO_API_KEY)', re.I)
+              for line in text.splitlines():
+                  if sensitive.search(line):
+                      line = re.sub(r"(['\"])(?:(?!\1).)*\1", lambda m: m.group(1) + '***REDACTED***' + m.group(1), line)
+                  lines.append(line)
+              return '\n'.join(lines) + '\n'
+
+          for src, dst in [
+              ('recovered_banesco_api.php','sanitized_banesco_api.php'),
+              ('recovered_proxy_payments.php','sanitized_proxy_payments.php'),
+          ]:
+              raw=Path(src).read_text(errors='replace')
+              Path(dst).write_text(sanitize(raw))
+          PY
+          echo '=== RECOVERED BANESCO API (SANITIZED) ==='
+          cat sanitized_banesco_api.php
+          echo '=== RECOVERED PROXY PAYMENT LOGIC (SANITIZED) ==='
+          cat sanitized_proxy_payments.php
+
+      - name: Upload sanitized recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovered-working-banesco-sanitized
+          path: |
+            sanitized_banesco_api.php
+            sanitized_proxy_payments.php
+          retention-days: 1
