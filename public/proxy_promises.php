@@ -20,7 +20,7 @@ function promiseRespond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    promiseRespond(200, ['status' => 'ready', 'version' => '3.2-promise-api-singular']);
+    promiseRespond(200, ['status' => 'ready', 'version' => '3.3-promise-action-payload']);
 }
 
 require_once __DIR__ . '/config_wisphub.php';
@@ -126,9 +126,14 @@ if ($method !== 'POST') {
     promiseRespond(405, ['error' => 'Método no permitido.']);
 }
 
-$invoiceId = isset($data['id_factura']) ? (int) $data['id_factura'] : 0;
+$invoiceId = (int) ($data['id_factura'] ?? $data['factura'] ?? 0);
 if ($invoiceId <= 0) {
     promiseRespond(422, ['error' => 'No se recibió una factura válida para registrar la promesa.']);
+}
+
+$deadline = trim((string) ($data['fecha_limite'] ?? $data['fecha_limite_de_pago'] ?? ''));
+if ($deadline === '') {
+    promiseRespond(422, ['error' => 'No se recibió una fecha límite válida para la promesa.']);
 }
 
 $invoiceHttp = 0;
@@ -161,10 +166,17 @@ if ($activeRestriction) {
     ]);
 }
 
+// WispHub's promise action endpoint expects its own field names. Keep the
+// portal/bot contract stable and translate it here before sending upstream.
+$outboundData = $data;
+$outboundData['factura'] = $invoiceId;
+$outboundData['fecha_limite_de_pago'] = $deadline;
+unset($outboundData['id_factura'], $outboundData['fecha_limite']);
+
 $httpCode = 0;
 $requestError = null;
 $contentType = null;
-$response = wisphubRequest($promiseCreateUrl, 'POST', $data, $httpCode, $requestError, $contentType);
+$response = wisphubRequest($promiseCreateUrl, 'POST', $outboundData, $httpCode, $requestError, $contentType);
 
 if ($response === null) {
     promiseLog("WispHub request failed url=$promiseCreateUrl error=$requestError");
@@ -202,8 +214,8 @@ echo json_encode($decoded, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
 function sendPromiseEmailNotification($data) {
     $to = 'admin@wifirapidito.com';
-    $invoiceId = htmlspecialchars((string) ($data['id_factura'] ?? 'N/A'), ENT_QUOTES, 'UTF-8');
-    $promiseDate = htmlspecialchars((string) ($data['fecha_limite'] ?? 'N/A'), ENT_QUOTES, 'UTF-8');
+    $invoiceId = htmlspecialchars((string) ($data['id_factura'] ?? $data['factura'] ?? 'N/A'), ENT_QUOTES, 'UTF-8');
+    $promiseDate = htmlspecialchars((string) ($data['fecha_limite'] ?? $data['fecha_limite_de_pago'] ?? 'N/A'), ENT_QUOTES, 'UTF-8');
     $subject = 'NUEVA PROMESA DE PAGO: Factura ' . $invoiceId;
     $headers = "From: noreply@wifirapidito.com\r\n";
     $headers .= "MIME-Version: 1.0\r\n";
