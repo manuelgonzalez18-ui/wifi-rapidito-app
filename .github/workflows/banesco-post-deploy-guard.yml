@@ -1,0 +1,130 @@
+name: Banesco Post Deploy Guard
+
+on:
+  workflow_run:
+    workflows: ['Frontend CI', 'Payment Stack Repair']
+    types: [completed]
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  restore-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST" && test -n "$HOSTINGER_USER" && test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_banesco_post
+          chmod 600 ~/.ssh/hostinger_banesco_post
+          ssh-keygen -y -f ~/.ssh/hostinger_banesco_post >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Atomically restore and verify certified production validator
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_banesco_post -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          BACKUPS="$BASE/.portal-backups"
+          list="$(mktemp)"
+          find "$BACKUPS" -maxdepth 1 -type f \( -name 'payment-stack-*.tar.gz' -o -name 'portal-backend-*.tar.gz' -o -name 'payment-hotfix-*.tar.gz' -o -name 'payment-before-private-config-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | cut -d' ' -f2- > "$list" || true
+          archive=""
+          while IFS= read -r candidate; do
+            [ -n "$candidate" ] || continue
+            if tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q 'BANESCO_API_PROD' \
+              && tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q "'referenceNumber'" \
+              && tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q "'accountId'" \
+              && tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q 'BANESCO_CLIENT_ID_PROD'; then
+              archive="$candidate"
+              break
+            fi
+          done < "$list"
+          rm -f "$list"
+          test -n "$archive" || { echo 'certified_backup_found=no'; exit 2; }
+          echo 'certified_backup_found=yes'
+
+          stamp="$(date +%Y%m%d-%H%M%S)"
+          if [ -f "$BASE/banesco_api.php" ]; then cp "$BASE/banesco_api.php" "$BASE/.portal-backups/banesco-pre-postguard-$stamp.php"; fi
+          tar -xOf "$archive" banesco_api.php > "$BASE/banesco_api.php.next"
+          php -l "$BASE/banesco_api.php.next" >/dev/null
+          grep -q 'BANESCO_API_PROD' "$BASE/banesco_api.php.next"
+          grep -q "'referenceNumber'" "$BASE/banesco_api.php.next"
+          grep -q "'accountId'" "$BASE/banesco_api.php.next"
+          mv "$BASE/banesco_api.php.next" "$BASE/banesco_api.php"
+          echo 'prod_validator_restored=yes'
+
+          php <<'PHP'
+          <?php
+          try {
+              require 'banesco_api.php';
+              echo 'env_prod=' . ((defined('BANESCO_ENV') && BANESCO_ENV === 'PROD') ? 'yes' : 'no') . PHP_EOL;
+              $m = new ReflectionMethod('BanescoAPI', 'getToken');
+              $m->setAccessible(true);
+              $token = (string)$m->invoke(null);
+              if (strlen($token) < 16) throw new RuntimeException('short_token');
+              echo 'sso_token_valid=yes' . PHP_EOL;
+          } catch (Throwable $e) {
+              echo 'sso_token_valid=no' . PHP_EOL;
+              $message = (string)$e->getMessage();
+              if (preg_match('/Code:\s*(\d+)/i', $message, $m)) echo 'sso_http_code=' . $m[1] . PHP_EOL;
+              else echo 'sso_http_code=unknown' . PHP_EOL;
+              exit(10);
+          }
+          PHP
+          REMOTE
+
+      - name: Verify validated-payment history is present
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_banesco_post -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          AUDIT="$HOME/domains/wifirapidito.com/.wifi-rapidito-private/payment-audit.jsonl"
+          test -s "$AUDIT"
+          php -r '
+            $cut=time()-30*86400; $c=["portal"=>0,"whatsapp_bot"=>0];
+            foreach(@file($argv[1],FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES)?:[] as $line){$r=json_decode($line,true);if(!is_array($r))continue;$ts=strtotime((string)($r["payment_date"]??$r["created_at"]??""));if($ts!==false&&$ts>=$cut&&isset($c[$r["source"]??""]))$c[$r["source"]]++;}
+            echo "portal_recent={$c["portal"]}\nassistant_recent={$c["whatsapp_bot"]}\n";
+            if(($c["portal"]+$c["whatsapp_bot"])<1) exit(2);
+          ' "$AUDIT"
+          REMOTE
+
+      - name: Verify public audit health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            health="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/payment_audit.php?health=postguard-$GITHUB_RUN_ID" 2>/dev/null || true)"
+            if grep -q '1.4-payment-audit-30d-all-sources' <<<"$health"; then
+              echo 'public_audit_health=yes'
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 3
+
+      - name: Publish guard status
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const sha = context.payload.workflow_run?.head_sha || context.sha;
+            await github.rest.repos.createCommitStatus({owner:context.repo.owner,repo:context.repo.repo,sha,state:'success',context:'Banesco Post Deploy Guard',description:'PROD SSO validator and validated-payment audit verified'});
