@@ -116,6 +116,10 @@ const enrichValidatedRows = (rows) => {
                 ...payment,
                 client_name: history.client_name || payment.client_name,
                 username: history.username || payment.username,
+                client_id: history.client_id || payment.client_id,
+                client_document: history.client_document || payment.client_document,
+                client_phone: history.client_phone || payment.client_phone,
+                client_email: history.client_email || payment.client_email,
                 service_id: payment.service_id || history.service_id,
                 invoice_id: payment.invoice_id || history.invoice_id,
                 payment_id: payment.payment_id || history.payment_id,
@@ -124,6 +128,7 @@ const enrichValidatedRows = (rows) => {
                 currency: payment.currency || history.currency || 'VES',
                 payment_date: payment.payment_date || history.payment_date,
                 method: payment.payment_type_label || (!historicalMethod && payment.method ? payment.method : (history.method || payment.method)),
+                registered_method: history.registered_method || history.method || payment.registered_method,
                 history_enriched: true,
             };
         });
@@ -152,7 +157,7 @@ const ValidatedPayments = () => {
             setLoading(true);
             setError('');
             try {
-                const response = await api.get('/payment_audit.php?limit=2000', {
+                const response = await api.get('/validated_payments.php?limit=2000', {
                     withCredentials: true,
                     timeout: 30000,
                     headers: { 'Cache-Control': 'no-cache' },
@@ -178,8 +183,10 @@ const ValidatedPayments = () => {
         return payments.filter((payment) => [
             payment.client_name,
             payment.username,
+            payment.client_id,
             payment.client_document,
             payment.client_phone,
+            payment.client_email,
             payment.service_id,
             payment.invoice_id,
             payment.reference,
@@ -188,6 +195,7 @@ const ValidatedPayments = () => {
             payment.payment_date,
             payment.payment_type_label,
             payment.method,
+            payment.registered_method,
             payment.bank_id,
             payment.bank_name,
             payment.payer_phone,
@@ -205,7 +213,7 @@ const ValidatedPayments = () => {
             <PageHeading
                 eyebrow="Finanzas"
                 title="Pagos validados"
-                description="Últimos 30 días. Solo se muestran validaciones realizadas por el Portal de Autogestión y el Asistente Virtual Rapidito, enriquecidas con los datos reales del cliente cuando están disponibles."
+                description="Últimos 30 días. Solo se muestran validaciones realizadas por el Portal de Autogestión y el Asistente Virtual Rapidito, con los datos reales del cliente y todos los detalles disponibles del pago."
                 action={(
                     <button type="button" onClick={() => setReloadKey((value) => value + 1)} className="secondary-action">
                         <RefreshCw size={16} /> Actualizar
@@ -235,7 +243,7 @@ const ValidatedPayments = () => {
                         type="search"
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}
-                        placeholder="Buscar por cliente, usuario, referencia, factura, servicio, banco, ID de pago o fecha"
+                        placeholder="Buscar por cliente, cédula, usuario, referencia, factura, servicio, banco, ID de pago o fecha"
                         className="glass-input w-full rounded-xl py-2.5 pl-10 pr-4 text-sm"
                     />
                 </div>
@@ -299,9 +307,11 @@ const ValidatedPayments = () => {
 
                                         <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                                             <DetailCell label="Cliente" value={clientName} />
+                                            <DetailCell label="ID cliente" value={payment.client_id} mono />
                                             <DetailCell label="Usuario" value={payment.username} mono />
                                             <DetailCell label="Cédula / Documento" value={payment.client_document} mono />
                                             <DetailCell label="Teléfono del cliente" value={payment.client_phone} mono />
+                                            <DetailCell label="Correo" value={payment.client_email} />
                                             <DetailCell label="Servicio" value={hasValue(payment.service_id) ? `#${payment.service_id}` : ''} mono />
                                             <DetailCell label="Factura" value={hasValue(payment.invoice_id) ? `#${payment.invoice_id}` : ''} mono />
                                             <DetailCell label="ID de pago" value={payment.payment_id} mono />
@@ -310,6 +320,7 @@ const ValidatedPayments = () => {
                                             <DetailCell label="Fecha del pago" value={payment.payment_date} mono />
                                             <DetailCell label="Fecha de validación" value={formatDateTime(payment.created_at)} />
                                             <DetailCell label="Modalidad" value={modality} />
+                                            <DetailCell label="Método registrado" value={payment.registered_method} />
                                             <DetailCell label="Banco de origen" value={bank} />
                                             <DetailCell label="Teléfono emisor" value={payment.payer_phone} mono />
                                             <DetailCell label="Referencia confirmada por Banesco" value={payment.banesco_reference} mono />
