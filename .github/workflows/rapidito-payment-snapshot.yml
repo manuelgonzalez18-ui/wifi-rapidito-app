@@ -1,0 +1,57 @@
+name: Rapidito Payment Snapshot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rapidito-payment-snapshot.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure VPS SSH
+        env:
+          VPS_HOST_SECRET: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_PORT_SECRET: ${{ secrets.VPS_PORT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VPS_HOST="${VPS_HOST_SECRET:-76.13.100.2}"
+          VPS_PORT="${VPS_PORT_SECRET:-22}"
+          test -n "$VPS_USER" || { echo 'Missing VPS_USER secret'; exit 1; }
+          test -n "$VPS_SSH_KEY" || { echo 'Missing VPS_SSH_KEY secret'; exit 1; }
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/vps_payment
+          chmod 600 ~/.ssh/vps_payment
+          ssh-keygen -y -f ~/.ssh/vps_payment >/dev/null
+          ssh-keyscan -T 10 -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          printf 'VPS_HOST=%s\nVPS_PORT=%s\n' "$VPS_HOST" "$VPS_PORT" >> "$GITHUB_ENV"
+
+      - name: Snapshot running Rapidito payment implementation
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_path="$(ssh -i ~/.ssh/vps_payment -p "$VPS_PORT" -o BatchMode=yes -o ConnectTimeout=20 "$VPS_USER@$VPS_HOST" 'for base in "$HOME" /opt /srv; do [ -d "$base" ] || continue; while IFS= read -r candidate; do if grep -q "container_name:[[:space:]]*bot_backend" "$candidate" 2>/dev/null; then dirname "$candidate"; exit 0; fi; done < <(find "$base" -maxdepth 6 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null); done; exit 1')"
+          test -n "$remote_path"
+          scp -i ~/.ssh/vps_payment -P "$VPS_PORT" "$VPS_USER@$VPS_HOST:$remote_path/bot_logic.py" live_bot_logic.py
+          python -m py_compile live_bot_logic.py
+          grep -n -E 'Banesco|banesco|paymentId|phoneNum|bankId|startDt|payment_audit|validando|registrar-pago|reportar-pago' live_bot_logic.py > live_payment_markers.txt || true
+          sed -E 's/(CLIENT_SECRET|ACCESS_TOKEN|API_KEY|PASSWORD|TOKEN)(["'"']?[[:space:]]*[:=][[:space:]]*["'"']?)[^"'"'[:space:]]+/\1\2***REDACTED***/Ig' live_bot_logic.py > live_bot_logic.redacted.py
+
+      - name: Upload diagnostic artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapidito-live-payment-diagnostic
+          path: |
+            live_bot_logic.redacted.py
+            live_payment_markers.txt
+          retention-days: 1
