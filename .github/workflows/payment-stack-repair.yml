@@ -26,7 +26,7 @@ permissions:
 jobs:
   validate-and-deploy-hostinger:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,6 +38,9 @@ jobs:
           php -l public/proxy_payments.php
           php -l public/payment_audit_lib.php
           php -l public/payment_audit.php
+          grep -q 'BANESCO_API_PROD' public/banesco_api.php
+          grep -q "'referenceNumber'" public/banesco_api.php
+          grep -q "'accountId'" public/banesco_api.php
           grep -q "'amount'" public/banesco_api.php
           grep -q "'startDt'" public/banesco_api.php
           grep -q "'bankId'" public/banesco_api.php
@@ -60,7 +63,185 @@ jobs:
           printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_payment
           chmod 600 ~/.ssh/hostinger_payment
           ssh-keygen -y -f ~/.ssh/hostinger_payment >/dev/null
-          ssh-keyscan -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Migrate protected Banesco production settings
+        if: github.event_name == 'push'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_payment -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          DOMAIN="$HOME/domains/wifirapidito.com"
+          BASE="$DOMAIN/public_html"
+          PRIVATE_DIR="$DOMAIN/.wifi-rapidito-private"
+          CONFIG="$PRIVATE_DIR/payment_secrets.php"
+          BACKUPS="$BASE/.portal-backups"
+          mkdir -p "$PRIVATE_DIR"
+          chmod 700 "$PRIVATE_DIR"
+          touch "$CONFIG"
+          chmod 600 "$CONFIG"
+
+          if ! grep -q 'BANESCO_PRIVATE_CLIENT_ID_PROD' "$CONFIG" 2>/dev/null \
+            || ! grep -q 'BANESCO_PRIVATE_CLIENT_SECRET_PROD' "$CONFIG" 2>/dev/null \
+            || ! grep -q 'BANESCO_PRIVATE_ACCOUNT_ID' "$CONFIG" 2>/dev/null; then
+            archive=""
+            while IFS= read -r candidate; do
+              [ -n "$candidate" ] || continue
+              if tar -xOf "$candidate" banesco_api.php 2>/dev/null | grep -q 'BANESCO_API_PROD'; then
+                archive="$candidate"
+                break
+              fi
+            done < <(find "$BACKUPS" -maxdepth 1 -type f \( -name 'payment-stack-*.tar.gz' -o -name 'portal-backend-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | cut -d' ' -f2-)
+
+            test -n "$archive" || { echo 'No production Banesco backup found.'; exit 1; }
+            legacy="$(mktemp)"
+            tar -xOf "$archive" banesco_api.php > "$legacy"
+
+            php -r '
+              $src = file_get_contents($argv[1]);
+              $cfg = $argv[2];
+              $extract = static function ($needle) use ($src) {
+                  $pattern = "/define\\(\\s*[\"\x27]" . preg_quote($needle, "/") . "[\"\x27]\\s*,\\s*[\"\x27]([^\"\x27]+)[\"\x27]\\s*\\)/i";
+                  return preg_match($pattern, $src, $m) ? $m[1] : "";
+              };
+              $clientId = $extract("BANESCO_CLIENT_ID_PROD");
+              $clientSecret = $extract("BANESCO_CLIENT_SECRET_PROD");
+              $accountId = "";
+              if (preg_match("/\\$accountId\\s*=\\s*\\$options\\[[\"\x27]accountId[\"\x27]\\]\\s*\\?\\?\\s*[\"\x27]([^\"\x27]+)[\"\x27]/", $src, $m)) {
+                  $accountId = $m[1];
+              }
+              if ($clientId === "" || $clientSecret === "" || $accountId === "") {
+                  fwrite(STDERR, "Could not recover the complete production Banesco configuration.\n");
+                  exit(2);
+              }
+              $existing = is_file($cfg) ? file_get_contents($cfg) : "";
+              $existing = preg_replace("/\\?>\\s*$/", "", $existing);
+              if (trim($existing) === "") $existing = "<?php\n";
+              elseif (strpos($existing, "<?php") === false) $existing = "<?php\n" . $existing;
+              $add = "\n// Banesco production settings migrated from protected pre-regression backup.\n";
+              if (strpos($existing, "BANESCO_PRIVATE_CLIENT_ID_PROD") === false) {
+                  $add .= "if (!defined(\"BANESCO_PRIVATE_CLIENT_ID_PROD\")) define(\"BANESCO_PRIVATE_CLIENT_ID_PROD\", " . var_export($clientId, true) . ");\n";
+              }
+              if (strpos($existing, "BANESCO_PRIVATE_CLIENT_SECRET_PROD") === false) {
+                  $add .= "if (!defined(\"BANESCO_PRIVATE_CLIENT_SECRET_PROD\")) define(\"BANESCO_PRIVATE_CLIENT_SECRET_PROD\", " . var_export($clientSecret, true) . ");\n";
+              }
+              if (strpos($existing, "BANESCO_PRIVATE_ACCOUNT_ID") === false) {
+                  $add .= "if (!defined(\"BANESCO_PRIVATE_ACCOUNT_ID\")) define(\"BANESCO_PRIVATE_ACCOUNT_ID\", " . var_export($accountId, true) . ");\n";
+              }
+              if (strpos($existing, "BANESCO_PRIVATE_ENV") === false) {
+                  $add .= "if (!defined(\"BANESCO_PRIVATE_ENV\")) define(\"BANESCO_PRIVATE_ENV\", \"PROD\");\n";
+              }
+              file_put_contents($cfg, $existing . $add . "?>\n", LOCK_EX);
+            ' "$legacy" "$CONFIG"
+            rm -f "$legacy"
+          fi
+
+          php -r 'require $argv[1]; foreach (["BANESCO_PRIVATE_CLIENT_ID_PROD","BANESCO_PRIVATE_CLIENT_SECRET_PROD","BANESCO_PRIVATE_ACCOUNT_ID"] as $n) { if (!defined($n) || trim((string)constant($n)) === "") exit(2); }' "$CONFIG"
+          echo 'Protected Banesco production configuration ready.'
+          REMOTE
+
+      - name: Initialize and backfill validated-payment audit
+        if: github.event_name == 'push'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_payment -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          DOMAIN="$HOME/domains/wifirapidito.com"
+          BASE="$DOMAIN/public_html"
+          PRIVATE_DIR="$DOMAIN/.wifi-rapidito-private"
+          AUDIT="$PRIVATE_DIR/payment-audit.jsonl"
+          DEBUG_LOG="$BASE/banesco_api_debug.log"
+          mkdir -p "$PRIVATE_DIR"
+          chmod 700 "$PRIVATE_DIR"
+          touch "$AUDIT"
+          chmod 600 "$AUDIT"
+
+          if [ -s "$DEBUG_LOG" ]; then
+            php -r '
+              $log = file_get_contents($argv[1]);
+              $audit = $argv[2];
+              $cutoff = time() - 30 * 86400;
+              $botIp = "76.13.100.2";
+              $existing = [];
+              foreach (@file($audit, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+                  $row = json_decode($line, true);
+                  if (!is_array($row)) continue;
+                  $key = strtolower(trim((string)($row["source"] ?? ""))) . "|" . trim((string)($row["reference"] ?? "")) . "|" . substr((string)($row["payment_date"] ?? ""), 0, 10) . "|" . number_format((float)($row["amount"] ?? 0), 2, ".", "");
+                  $existing[$key] = true;
+              }
+
+              $blocks = preg_split("/^-{40}\\s*$/m", $log);
+              $pending = null;
+              $added = ["portal" => 0, "whatsapp_bot" => 0];
+              foreach ($blocks as $block) {
+                  $block = trim($block);
+                  if ($block === "") continue;
+                  if (!preg_match("/^\\[([^\\]]+)\\] === (REQUEST SENT|RESPONSE RECEIVED) ===\\s*(.*)$/s", $block, $m)) continue;
+                  $stamp = strtotime(trim($m[1]));
+                  $kind = $m[2];
+                  $json = json_decode(trim($m[3]), true);
+                  if (!is_array($json)) continue;
+                  if ($kind === "REQUEST SENT") {
+                      $pending = ["stamp" => $stamp, "data" => $json];
+                      continue;
+                  }
+                  if ($pending === null) continue;
+                  $request = $pending;
+                  $pending = null;
+                  $status = $json["body"]["httpStatus"] ?? null;
+                  if (!is_array($status) || (string)($status["statusCode"] ?? "") !== "200" || strtoupper((string)($status["statusDesc"] ?? "")) !== "OK") continue;
+                  $tx = $request["data"]["dataRequest"]["transaction"] ?? [];
+                  if (!is_array($tx)) continue;
+                  $reference = trim((string)($tx["referenceNumber"] ?? ""));
+                  if ($reference === "") continue;
+                  $paymentDate = substr((string)($tx["startDt"] ?? ""), 0, 10);
+                  $dateTs = $paymentDate !== "" ? strtotime($paymentDate) : ($request["stamp"] ?: false);
+                  if ($dateTs === false || $dateTs < $cutoff) continue;
+                  $paymentDate = date("Y-m-d", $dateTs);
+                  $amount = is_numeric($tx["amount"] ?? null) ? round((float)$tx["amount"], 2) : 0.0;
+                  $ip = (string)($request["data"]["dataRequest"]["device"]["ipAddress"] ?? "");
+                  $source = $ip === $botIp ? "whatsapp_bot" : "portal";
+                  $key = $source . "|" . $reference . "|" . $paymentDate . "|" . number_format($amount, 2, ".", "");
+                  if (isset($existing[$key])) continue;
+                  $existing[$key] = true;
+                  $row = [
+                      "id" => "backfill-" . substr(hash("sha256", $key), 0, 20),
+                      "created_at" => date("c", $request["stamp"] ?: $dateTs),
+                      "source" => $source,
+                      "client_name" => "",
+                      "username" => "",
+                      "service_id" => "",
+                      "invoice_id" => "",
+                      "reference" => $reference,
+                      "amount" => $amount,
+                      "currency" => "VES",
+                      "payment_date" => $paymentDate,
+                      "method" => "Banesco validado (histórico)",
+                      "banesco_status" => "validated",
+                      "wisphub_status" => "unknown",
+                      "wisphub_task_id" => "",
+                  ];
+                  file_put_contents($audit, json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL, FILE_APPEND | LOCK_EX);
+                  $added[$source]++;
+              }
+              echo "Audit backfill: portal=" . $added["portal"] . " assistant=" . $added["whatsapp_bot"] . PHP_EOL;
+            ' "$DEBUG_LOG" "$AUDIT"
+          else
+            echo 'No legacy Banesco debug log available for historical backfill.'
+          fi
+
+          printf 'Protected audit records: '
+          wc -l < "$AUDIT" | tr -d ' '
+          echo
+          REMOTE
 
       - name: Backup and deploy payment backend
         if: github.event_name == 'push'
@@ -86,7 +267,7 @@ jobs:
           done
 
           ssh -i ~/.ssh/hostinger_payment -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
-            "grep -q \"'startDt'\" '$REMOTE_BASE/banesco_api.php' && grep -q \"'phoneNum'\" '$REMOTE_BASE/banesco_api.php' && grep -q '1.4-payment-audit-30d-all-sources' '$REMOTE_BASE/payment_audit.php'"
+            "grep -q 'BANESCO_API_PROD' '$REMOTE_BASE/banesco_api.php' && grep -q \"'referenceNumber'\" '$REMOTE_BASE/banesco_api.php' && grep -q \"'accountId'\" '$REMOTE_BASE/banesco_api.php' && grep -q \"'startDt'\" '$REMOTE_BASE/banesco_api.php' && grep -q \"'phoneNum'\" '$REMOTE_BASE/banesco_api.php' && grep -q '1.4-payment-audit-30d-all-sources' '$REMOTE_BASE/payment_audit.php'"
 
           ssh -i ~/.ssh/hostinger_payment -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" \
             "find '$REMOTE_BASE/.portal-backups' -type f -name 'payment-stack-*.tar.gz' -mtime +14 -delete || true"
@@ -119,7 +300,7 @@ jobs:
               sha: context.sha,
               state: 'success',
               context: 'Payment Stack Deploy',
-              description: 'Banesco validation and payment audit deployed and verified',
+              description: 'Banesco production validation and payment audit deployed',
             });
 
   snapshot-live-rapidito:
@@ -127,7 +308,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
+      - name: Check bot VPS credentials
+        id: vps
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        shell: bash
+        run: |
+          if [[ -n "$VPS_HOST" && -n "$VPS_USER" && -n "$VPS_SSH_KEY" ]]; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo 'Rapidito VPS credentials are not configured in this repository; skipping snapshot.'
+          fi
+
       - name: Configure bot VPS SSH
+        if: steps.vps.outputs.available == 'true'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -136,9 +333,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$VPS_HOST"
-          test -n "$VPS_USER"
-          test -n "$VPS_SSH_KEY"
           VPS_PORT="${VPS_PORT:-22}"
           mkdir -p ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/vps_payment
@@ -147,6 +341,7 @@ jobs:
           ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Snapshot running Rapidito bot source
+        if: steps.vps.outputs.available == 'true'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -159,9 +354,10 @@ jobs:
           test -n "$remote_path"
           scp -i ~/.ssh/vps_payment -P "$VPS_PORT" "$VPS_USER@$VPS_HOST:$remote_path/bot_logic.py" live_bot_logic.py
           python -m py_compile live_bot_logic.py
-          grep -n -E 'Banesco|banesco|paymentId|phoneNum|bankId|startDt|payment_audit' live_bot_logic.py | head -n 200 > live_payment_markers.txt || true
+          grep -n -E 'Banesco|banesco|referenceNumber|phoneNum|bankId|startDt|payment_audit' live_bot_logic.py | head -n 200 > live_payment_markers.txt || true
 
       - name: Upload live bot snapshot
+        if: steps.vps.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: rapidito-live-payment-diagnostic

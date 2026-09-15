@@ -10,6 +10,7 @@ header('Access-Control-Allow-Methods: POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
 require_once __DIR__ . '/payment_audit_lib.php';
+require_once __DIR__ . '/config_wisphub.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
@@ -17,8 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 // ── CONFIGURACIÓN ──────────────────────────────────────────
-define('WISPHUB_API_KEY', 'OYIxEv1H.qmnKH5Ck8NvLWw4Tnyoa7PswdhrJlJ9s');
-define('WISPHUB_API_URL', 'https://api.wisphub.app/api/facturas/reportar-pago/');
+define('WISPHUB_PAYMENT_API_URL', rtrim(WISPHUB_API_URL, '/') . '/facturas/reportar-pago/');
 
 // Mapa forma_pago: el frontend envía el ID numérico directamente
 // 16749 = Transferencia Bancaria, 16748 = Efectivo
@@ -43,7 +43,7 @@ const MIME_TYPES = [
 // ── FUNCIÓN VALIDACIÓN AUTOMÁTICA BANESCO ────────────────────
 function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago, $totalCobrado, $nombreUser) {
     // Según Swagger docs: POST /api/facturas/registrar-pago/{id_factura}/
-    $url = 'https://api.wisphub.app/api/facturas/registrar-pago/' . $facturaId . '/';
+    $url = rtrim(WISPHUB_API_URL, '/') . '/facturas/registrar-pago/' . $facturaId . '/';
 
     $payload = [
         'referencia'    => $referencia,
@@ -59,9 +59,10 @@ function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => json_encode($payload),
         CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_TIMEOUT        => 30,
         CURLOPT_HTTPHEADER     => [
-            'Authorization: Api-Key ' . WISPHUB_API_KEY,
+            'Authorization: Api-Key ' . WISPHUB_TOKEN,
             'Content-Type: application/json',
             'Accept: application/json',
         ],
@@ -79,7 +80,7 @@ function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago
     $data = json_decode($response, true);
 
     if ($httpCode !== 200) {
-        $msg = $data['detail'] ?? (is_array($data['errors'] ?? null) ? $data['errors'][0] : null) ?? "Error HTTP $httpCode en registrar-pago: $response";
+        $msg = $data['detail'] ?? (is_array($data['errors'] ?? null) ? $data['errors'][0] : null) ?? "Error HTTP $httpCode en registrar-pago";
         throw new Exception($msg);
     }
 
@@ -92,7 +93,7 @@ function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago
 
 // ── FUNCIÓN PRINCIPAL ──────────────────────────────────────
 function reportarPago($datos, $archivo = null) {
-    $url = WISPHUB_API_URL . $datos['factura_id'] . '/';
+    $url = WISPHUB_PAYMENT_API_URL . $datos['factura_id'] . '/';
 
     $postFields = [
         'forma_pago'       => (string)$datos['forma_pago'],
@@ -117,9 +118,10 @@ function reportarPago($datos, $archivo = null) {
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => $postFields,
         CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_TIMEOUT        => 30,
         CURLOPT_HTTPHEADER     => [
-            'Authorization: Api-Key ' . WISPHUB_API_KEY,
+            'Authorization: Api-Key ' . WISPHUB_TOKEN,
             'Accept: application/json',
         ],
     ]);
@@ -136,7 +138,7 @@ function reportarPago($datos, $archivo = null) {
     $data = json_decode($response, true);
 
     if ($httpCode !== 200) {
-        $msg = $data['detail'] ?? (is_array($data['errors'] ?? null) ? $data['errors'][0] : null) ?? "Error HTTP $httpCode: $response";
+        $msg = $data['detail'] ?? (is_array($data['errors'] ?? null) ? $data['errors'][0] : null) ?? "Error HTTP $httpCode";
         throw new Exception($msg);
     }
 
@@ -189,6 +191,9 @@ try {
         require_once __DIR__ . '/banesco_api.php';
 
         $montoEnviado = $_POST['amount'] ?? 0;
+        if (!is_numeric($montoEnviado) || (float)$montoEnviado <= 0) {
+            throw new Exception('Monto inválido para validar el pago.');
+        }
         $fechaBanesco = substr(trim((string)$datos['fecha_pago']), 0, 10);
 
         // Pago Móvil Banesco -> Banesco puede no requerir que el usuario elija
@@ -218,9 +223,9 @@ try {
             $banescoOptions['phoneNum'] = $phoneNum;
         }
 
+        // El contrato productivo usa referenceNumber + accountId y no customerIdR/paymentId.
         $banescoResponse = BanescoAPI::checkTransaction(
             $datos['referencia'],
-            'J402638850',
             $banescoOptions
         );
 
