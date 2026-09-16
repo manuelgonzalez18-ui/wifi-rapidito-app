@@ -42,9 +42,10 @@ const MIME_TYPES = [
 
 // ── FUNCIÓN VALIDACIÓN AUTOMÁTICA BANESCO ────────────────────
 function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago, $totalCobrado, $nombreUser) {
-    // WispHub OpenAPI: POST /api/facturas/{id_factura}/registrar-pago/
-    // El endpoint anterior invertía los segmentos y devolvía HTTP 404.
-    $url = 'https://api.wisphub.net/api/facturas/' . rawurlencode((string)$facturaId) . '/registrar-pago/';
+    // Esta cuenta/API key está autorizada en el host api.wisphub.app usado por
+    // el resto del portal. El mismo token devuelve 403 en api.wisphub.net.
+    // La ruta correcta sigue siendo /facturas/{id}/registrar-pago/.
+    $url = rtrim(WISPHUB_API_URL, '/') . '/facturas/' . rawurlencode((string)$facturaId) . '/registrar-pago/';
 
     $payload = [
         'referencia'    => $referencia,
@@ -81,6 +82,9 @@ function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago
     $data = json_decode($response, true);
 
     if ($httpCode !== 200) {
+        if ($httpCode === 403) {
+            throw new Exception('WispHub rechazó el registro del pago por permisos de la API key activa.');
+        }
         $msg = $data['detail'] ?? (is_array($data['errors'] ?? null) ? $data['errors'][0] : null) ?? "Error HTTP $httpCode en registrar-pago";
         throw new Exception($msg);
     }
