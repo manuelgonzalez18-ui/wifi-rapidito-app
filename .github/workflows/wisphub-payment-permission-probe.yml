@@ -1,0 +1,98 @@
+name: WispHub Payment Permission Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/wisphub-payment-permission-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST" && test -n "$HOSTINGER_USER" && test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_wisphub_probe
+          chmod 600 ~/.ssh/hostinger_wisphub_probe
+          ssh-keygen -y -f ~/.ssh/hostinger_wisphub_probe >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Probe current API key without touching a real invoice
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_wisphub_probe -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/domains/wifirapidito.com/public_html"
+          php <<'PHP'
+          <?php
+          require 'config_wisphub.php';
+          $token = WISPHUB_TOKEN;
+
+          function requestCode(string $url, string $method='GET', ?array $payload=null): int {
+              global $token;
+              $ch = curl_init($url);
+              $opts = [
+                  CURLOPT_RETURNTRANSFER => true,
+                  CURLOPT_HTTPHEADER => [
+                      'Authorization: Api-Key ' . $token,
+                      'Accept: application/json',
+                      'Content-Type: application/json',
+                  ],
+                  CURLOPT_CONNECTTIMEOUT => 8,
+                  CURLOPT_TIMEOUT => 20,
+                  CURLOPT_SSL_VERIFYPEER => true,
+                  CURLOPT_SSL_VERIFYHOST => 2,
+              ];
+              if ($method !== 'GET') {
+                  $opts[CURLOPT_CUSTOMREQUEST] = $method;
+                  if ($payload !== null) $opts[CURLOPT_POSTFIELDS] = json_encode($payload);
+              }
+              curl_setopt_array($ch, $opts);
+              curl_exec($ch);
+              $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+              curl_close($ch);
+              return $code;
+          }
+
+          $fakeInvoice = '999999999999';
+          $payload = [
+              'referencia' => 'permission-probe',
+              'fecha_pago' => date('Y-m-d H:i'),
+              'total_cobrado' => 0.01,
+              'accion' => 0,
+              'forma_pago' => 16749,
+          ];
+
+          $results = [
+              'invoice_9863_get_app' => requestCode('https://api.wisphub.app/api/facturas/9863/'),
+              'invoice_9863_get_net' => requestCode('https://api.wisphub.net/api/facturas/9863/'),
+              'register_fake_app' => requestCode('https://api.wisphub.app/api/facturas/' . $fakeInvoice . '/registrar-pago/', 'POST', $payload),
+              'register_fake_net' => requestCode('https://api.wisphub.net/api/facturas/' . $fakeInvoice . '/registrar-pago/', 'POST', $payload),
+              'report_fake_app' => requestCode('https://api.wisphub.app/api/facturas/reportar-pago/' . $fakeInvoice . '/', 'POST', $payload),
+              'report_fake_net' => requestCode('https://api.wisphub.net/api/facturas/reportar-pago/' . $fakeInvoice . '/', 'POST', $payload),
+          ];
+
+          foreach ($results as $name => $code) echo $name . '=' . $code . PHP_EOL;
+
+          $registerCodes = [$results['register_fake_app'], $results['register_fake_net']];
+          $allForbidden = count(array_filter($registerCodes, fn($c) => $c === 403)) === 2;
+          echo 'register_permission=' . ($allForbidden ? 'denied' : 'not_globally_denied') . PHP_EOL;
+          ?>
+          PHP
+          REMOTE
