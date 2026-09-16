@@ -40,6 +40,90 @@ const MIME_TYPES = [
     'image/heic',
 ];
 
+/**
+ * WispHub exige fecha_pago exactamente en formato YYYY-MM-DD HH:mm.
+ * Rapidito históricamente envía solo YYYY-MM-DD, por lo que normalizamos aquí
+ * para que Portal y WhatsApp compartan el mismo contrato válido.
+ */
+function normalizarFechaPagoWisphub($value) {
+    $raw = trim((string)$value);
+    if ($raw === '') {
+        return date('Y-m-d H:i');
+    }
+
+    $formats = [
+        'Y-m-d H:i',
+        'Y-m-d H:i:s',
+        'Y-m-d',
+        'd/m/Y H:i',
+        'd/m/Y H:i:s',
+        'd/m/Y',
+    ];
+
+    foreach ($formats as $format) {
+        $dt = DateTime::createFromFormat($format, $raw);
+        $errors = DateTime::getLastErrors();
+        $valid = $dt !== false && ($errors === false || (($errors['warning_count'] ?? 0) === 0 && ($errors['error_count'] ?? 0) === 0));
+        if ($valid) {
+            return $dt->format('Y-m-d H:i');
+        }
+    }
+
+    $ts = strtotime($raw);
+    if ($ts !== false) {
+        return date('Y-m-d H:i', $ts);
+    }
+
+    throw new Exception('Fecha de pago inválida para WispHub. Use YYYY-MM-DD HH:mm.');
+}
+
+/**
+ * Extrae mensajes de validación de WispHub incluso cuando vienen asociados a
+ * campos (por ejemplo fecha_pago, forma_pago o total_cobrado) y no en detail.
+ */
+function mensajeErrorWisphub($data, $httpCode, $context = 'registrar-pago') {
+    if (is_array($data)) {
+        foreach (['detail', 'message', 'messages', 'error', 'errors'] as $key) {
+            if (!array_key_exists($key, $data)) continue;
+            $value = $data[$key];
+            if (is_string($value) && trim($value) !== '') {
+                return trim($value);
+            }
+            if (is_array($value)) {
+                $flat = [];
+                array_walk_recursive($value, function ($item, $field) use (&$flat) {
+                    if (is_scalar($item) && trim((string)$item) !== '') {
+                        $flat[] = trim((string)$item);
+                    }
+                });
+                if ($flat) return implode(' | ', array_slice(array_unique($flat), 0, 5));
+            }
+        }
+
+        $fieldMessages = [];
+        foreach ($data as $field => $value) {
+            if (is_string($value) && trim($value) !== '') {
+                $fieldMessages[] = $field . ': ' . trim($value);
+            } elseif (is_array($value)) {
+                $flat = [];
+                array_walk_recursive($value, function ($item) use (&$flat) {
+                    if (is_scalar($item) && trim((string)$item) !== '') {
+                        $flat[] = trim((string)$item);
+                    }
+                });
+                if ($flat) {
+                    $fieldMessages[] = $field . ': ' . implode(', ', array_slice(array_unique($flat), 0, 3));
+                }
+            }
+        }
+        if ($fieldMessages) {
+            return implode(' | ', array_slice($fieldMessages, 0, 5));
+        }
+    }
+
+    return "Error HTTP $httpCode en $context";
+}
+
 // ── FUNCIÓN VALIDACIÓN AUTOMÁTICA BANESCO ────────────────────
 function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago, $totalCobrado, $nombreUser) {
     // Esta cuenta/API key está autorizada en el host api.wisphub.app usado por
@@ -47,19 +131,26 @@ function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago
     // La ruta correcta sigue siendo /facturas/{id}/registrar-pago/.
     $url = rtrim(WISPHUB_API_URL, '/') . '/facturas/' . rawurlencode((string)$facturaId) . '/registrar-pago/';
 
+    $fechaPago = normalizarFechaPagoWisphub($fechaPago);
+
     $payload = [
-        'referencia'    => $referencia,
+        'referencia'    => (string)$referencia,
         'fecha_pago'    => $fechaPago,
         'total_cobrado' => (float)$totalCobrado,
         'accion'        => 1, // 1 = Registrar pago y activar el servicio
-        'forma_pago'    => (int)$formaPago
+        'forma_pago'    => (int)$formaPago,
     ];
+
+    $jsonPayload = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($jsonPayload === false) {
+        throw new Exception('No se pudo construir la solicitud JSON para WispHub.');
+    }
 
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_POSTFIELDS     => $jsonPayload,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_TIMEOUT        => 30,
@@ -79,13 +170,14 @@ function registrarPagoAutorizado($facturaId, $referencia, $fechaPago, $formaPago
         throw new Exception("Error de conexión WispHub (registrar-pago): $curlError");
     }
 
-    $data = json_decode($response, true);
+    $data = json_decode((string)$response, true);
 
     if ($httpCode !== 200) {
         if ($httpCode === 403) {
             throw new Exception('WispHub rechazó el registro del pago por permisos de la API key activa.');
         }
-        $msg = $data['detail'] ?? (is_array($data['errors'] ?? null) ? $data['errors'][0] : null) ?? "Error HTTP $httpCode en registrar-pago";
+        $msg = mensajeErrorWisphub($data, $httpCode, 'registrar-pago');
+        error_log(sprintf('[WispHub registrar-pago] invoice=%s http=%d error=%s', (string)$facturaId, (int)$httpCode, substr($msg, 0, 500)));
         throw new Exception($msg);
     }
 
@@ -102,7 +194,7 @@ function reportarPago($datos, $archivo = null) {
 
     $postFields = [
         'forma_pago'       => (string)$datos['forma_pago'],
-        'fecha_pago'       => $datos['fecha_pago'],
+        'fecha_pago'       => normalizarFechaPagoWisphub($datos['fecha_pago']),
         'referencia'       => $datos['referencia'],
         'comprobante_pago' => $datos['comprobante_texto'],
         'nombre_user'      => $datos['nombre_usuario'],
@@ -140,10 +232,10 @@ function reportarPago($datos, $archivo = null) {
         throw new Exception("Error de conexión: $curlError");
     }
 
-    $data = json_decode($response, true);
+    $data = json_decode((string)$response, true);
 
     if ($httpCode !== 200) {
-        $msg = $data['detail'] ?? (is_array($data['errors'] ?? null) ? $data['errors'][0] : null) ?? "Error HTTP $httpCode";
+        $msg = mensajeErrorWisphub($data, $httpCode, 'reportar-pago');
         throw new Exception($msg);
     }
 
@@ -160,7 +252,7 @@ try {
         throw new Exception('Método no permitido');
     }
 
-    // Campos requeridos que envía PaymentReport.jsx
+    // Campos requeridos que envía PaymentReport.jsx / Rapidito
     $requeridos = ['invoice_id', 'reference', 'user_name'];
     foreach ($requeridos as $campo) {
         if (empty($_POST[$campo])) {
@@ -178,8 +270,8 @@ try {
         $formaPagoId = 16749; // default: transferencia
     }
 
-    // Fecha: el frontend envía "2026-02-21 22:10"
-    $fechaPago = $_POST['payment_date'] ?? date('Y-m-d');
+    // WispHub exige YYYY-MM-DD HH:mm; Rapidito puede enviar solo la fecha.
+    $fechaPago = normalizarFechaPagoWisphub($_POST['payment_date'] ?? date('Y-m-d H:i'));
 
     $datos = [
         'factura_id'      => preg_replace('/[^0-9]/', '', $_POST['invoice_id']),
