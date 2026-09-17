@@ -20,7 +20,7 @@ function promiseRespond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    promiseRespond(200, ['status' => 'ready', 'version' => '3.3-promise-action-payload']);
+    promiseRespond(200, ['status' => 'ready', 'version' => '3.4-wisphub-promise-contract']);
 }
 
 require_once __DIR__ . '/config_wisphub.php';
@@ -89,6 +89,54 @@ function invoiceIdentifiers($invoice) {
     ];
 }
 
+function normalizePromiseDeadline($value) {
+    $value = trim((string) $value);
+    if ($value === '') return '';
+
+    foreach (['Y-m-d', 'Y/m/d'] as $format) {
+        $date = DateTime::createFromFormat('!' . $format, $value);
+        $errors = DateTime::getLastErrors();
+        $valid = $date instanceof DateTime
+            && ($errors === false || (($errors['warning_count'] ?? 0) === 0 && ($errors['error_count'] ?? 0) === 0));
+        if ($valid) {
+            // WispHub documents fecha_limite as YYYY/MM/DD.
+            return $date->format('Y/m/d');
+        }
+    }
+
+    return '';
+}
+
+function promiseApiError($decoded) {
+    if (!is_array($decoded)) return '';
+
+    foreach (['error', 'detail', 'message', 'non_field_errors'] as $key) {
+        if (!array_key_exists($key, $decoded)) continue;
+        $value = $decoded[$key];
+        if (is_scalar($value)) return trim((string) $value);
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                if (is_scalar($item) && trim((string) $item) !== '') return trim((string) $item);
+            }
+        }
+    }
+
+    foreach ($decoded as $key => $value) {
+        if (is_scalar($value) && trim((string) $value) !== '') {
+            return trim((string) $key) . ': ' . trim((string) $value);
+        }
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                if (is_scalar($item) && trim((string) $item) !== '') {
+                    return trim((string) $key) . ': ' . trim((string) $item);
+                }
+            }
+        }
+    }
+
+    return '';
+}
+
 if ($method === 'GET') {
     $serviceId = isset($_GET['cliente']) ? preg_replace('/\D+/', '', (string) $_GET['cliente']) : '';
     if ($serviceId === '') {
@@ -131,7 +179,8 @@ if ($invoiceId <= 0) {
     promiseRespond(422, ['error' => 'No se recibió una factura válida para registrar la promesa.']);
 }
 
-$deadline = trim((string) ($data['fecha_limite'] ?? $data['fecha_limite_de_pago'] ?? ''));
+$deadlineRaw = trim((string) ($data['fecha_limite'] ?? $data['fecha_limite_de_pago'] ?? ''));
+$deadline = normalizePromiseDeadline($deadlineRaw);
 if ($deadline === '') {
     promiseRespond(422, ['error' => 'No se recibió una fecha límite válida para la promesa.']);
 }
@@ -166,12 +215,18 @@ if ($activeRestriction) {
     ]);
 }
 
-// WispHub's promise action endpoint expects its own field names. Keep the
-// portal/bot contract stable and translate it here before sending upstream.
-$outboundData = $data;
-$outboundData['factura'] = $invoiceId;
-$outboundData['fecha_limite_de_pago'] = $deadline;
-unset($outboundData['id_factura'], $outboundData['fecha_limite']);
+// WispHub's documented POST /api/promesa-pago/ contract is:
+// id_factura, fecha_limite (YYYY/MM/DD), comentarios and accion (0|1).
+// Do not translate these fields to the response names "factura" or
+// "fecha_limite_de_pago"; those are not accepted by the create endpoint.
+$action = (int) ($data['accion'] ?? 1);
+if (!in_array($action, [0, 1], true)) $action = 1;
+$outboundData = [
+    'id_factura' => $invoiceId,
+    'fecha_limite' => $deadline,
+    'comentarios' => trim((string) ($data['comentarios'] ?? '')),
+    'accion' => $action,
+];
 
 $httpCode = 0;
 $requestError = null;
@@ -194,21 +249,22 @@ if (!is_array($decoded)) {
 }
 
 if ($httpCode < 200 || $httpCode >= 300) {
-    $safeError = trim((string) ($decoded['error'] ?? $decoded['detail'] ?? $decoded['message'] ?? ''));
+    $safeError = promiseApiError($decoded);
     if ($httpCode === 403) {
         $safeError = 'La cuenta API de WispHub no tiene habilitado el permiso de Promesas de Pago.';
     } elseif ($safeError === '' || stripos($safeError, '<html') !== false || stripos($safeError, '<!doctype') !== false) {
         $safeError = 'WispHub no pudo registrar la promesa en este momento.';
     }
-    promiseLog("Promise rejected url=$promiseCreateUrl code=$httpCode error=" . substr($safeError, 0, 180));
+    promiseLog("Promise rejected url=$promiseCreateUrl invoice=$invoiceId code=$httpCode error=" . substr($safeError, 0, 220));
     promiseRespond($httpCode ?: 502, [
         'error' => $safeError,
         'retryable' => $httpCode >= 500,
+        'upstream_status' => $httpCode,
     ]);
 }
 
 sendPromiseEmailNotification($data);
-promiseLog("REQ: $promiseCreateUrl | CODE: $httpCode | JSON OK");
+promiseLog("REQ: $promiseCreateUrl | invoice=$invoiceId | CODE: $httpCode | JSON OK");
 http_response_code($httpCode ?: 200);
 echo json_encode($decoded, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 

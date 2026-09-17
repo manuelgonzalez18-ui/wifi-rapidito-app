@@ -27,6 +27,18 @@ jobs:
       - name: Validate PHP syntax
         run: php -l public/proxy_promises.php
 
+      - name: Validate WispHub promise contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "'id_factura' => \$invoiceId" public/proxy_promises.php
+          grep -q "'fecha_limite' => \$deadline" public/proxy_promises.php
+          grep -q "3.4-wisphub-promise-contract" public/proxy_promises.php
+          if grep -q "outboundData\['factura'\]" public/proxy_promises.php; then
+            echo 'Legacy invalid promise payload mapping is still present.'
+            exit 1
+          fi
+
       - name: Configure Hostinger SSH
         env:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
@@ -73,7 +85,7 @@ jobs:
           set -euo pipefail
           for attempt in {1..12}; do
             BODY="$(curl -fsS -H 'Cache-Control: no-cache' "https://wifirapidito.com/proxy_promises.php?health=$GITHUB_SHA" 2>/dev/null || true)"
-            if grep -q '3.3-promise-action-payload' <<<"$BODY"; then
+            if grep -q '3.4-wisphub-promise-contract' <<<"$BODY"; then
               echo "Promise proxy deployment verified."
               exit 0
             fi
@@ -95,5 +107,5 @@ jobs:
               sha: context.sha,
               state: 'success',
               context: 'Promise Proxy Deploy',
-              description: 'Promise proxy deployed and publicly verified',
+              description: 'WispHub promise contract deployed and publicly verified',
             });
