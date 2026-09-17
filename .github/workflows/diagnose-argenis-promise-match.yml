@@ -1,0 +1,185 @@
+name: Diagnose Argenis Promise Match
+
+on:
+  push:
+    branches: ['diag/argenis-promise-restriction-match']
+    paths:
+      - '.github/workflows/diagnose-argenis-promise-match.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HOSTINGER_HOST"
+          test -n "$HOSTINGER_USER"
+          test -n "$HOSTINGER_SSH_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_diag
+          chmod 600 ~/.ssh/hostinger_diag
+          ssh-keygen -y -f ~/.ssh/hostinger_diag >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Diagnose restriction identity matching
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_diag -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/domains/wifirapidito.com/public_html"
+          php <<'PHP'
+          <?php
+          require __DIR__ . '/config_wisphub.php';
+          require __DIR__ . '/promise_restrictions_lib.php';
+
+          $targetUsername = 'argenisveitia';
+
+          function diag_get(string $url): ?array {
+              $ch = curl_init($url);
+              curl_setopt_array($ch, [
+                  CURLOPT_RETURNTRANSFER => true,
+                  CURLOPT_HTTPHEADER => [
+                      'Authorization: Api-Key ' . WISPHUB_TOKEN,
+                      'Accept: application/json',
+                  ],
+                  CURLOPT_CONNECTTIMEOUT => 8,
+                  CURLOPT_TIMEOUT => 20,
+                  CURLOPT_SSL_VERIFYPEER => true,
+                  CURLOPT_SSL_VERIFYHOST => 2,
+              ]);
+              $body = curl_exec($ch);
+              $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+              $err = curl_error($ch);
+              curl_close($ch);
+              if ($err !== '' || $http < 200 || $http >= 300 || !is_string($body)) {
+                  echo 'request_failed_http=' . $http . PHP_EOL;
+                  return null;
+              }
+              $data = json_decode($body, true);
+              return is_array($data) ? $data : null;
+          }
+
+          function diag_invoice_identifiers(array $invoice): array {
+              $client = is_array($invoice['cliente'] ?? null) ? $invoice['cliente'] : [];
+              $serviceValue = pr_first_value($invoice, ['id_servicio', 'servicio_id', 'servicio'], '');
+              $serviceId = pr_scalar_id($serviceValue);
+              if ($serviceId === '' && isset($client['id_servicio'])) $serviceId = (string) $client['id_servicio'];
+              $clientId = pr_scalar_id(pr_first_value($invoice, ['id_cliente', 'cliente_id'], ''));
+              if ($clientId === '') $clientId = pr_scalar_id(pr_first_value($client, ['id_cliente', 'id', 'pk'], ''));
+              return [
+                  'service_id' => trim((string) $serviceId),
+                  'client_id' => trim((string) $clientId),
+                  'username' => pr_normalize_username(pr_first_value($client, ['usuario', 'usuario_portal', 'username'], '')),
+                  'phone' => pr_normalize_phone(pr_first_value($client, ['telefono', 'movil', 'celular', 'phone'], '')),
+              ];
+          }
+
+          // Resolve exact WispHub client.
+          $client = null;
+          $offset = 0;
+          for ($page = 0; $page < 40; $page++) {
+              $payload = diag_get(rtrim(WISPHUB_API_URL, '/') . '/clientes/?limit=300&offset=' . $offset);
+              if (!$payload) break;
+              $items = is_array($payload['results'] ?? null) ? $payload['results'] : (array_is_list($payload) ? $payload : [$payload]);
+              foreach ($items as $candidate) {
+                  if (!is_array($candidate)) continue;
+                  $username = pr_normalize_username(pr_first_value($candidate, ['usuario', 'usuario_portal', 'username'], ''));
+                  if ($username === $targetUsername) { $client = $candidate; break 2; }
+              }
+              $received = count($items);
+              if ($received === 0) break;
+              $offset += $received;
+              $total = isset($payload['count']) && is_numeric($payload['count']) ? (int)$payload['count'] : null;
+              if ($total !== null && $offset >= $total) break;
+              if ($total === null && $received < 300 && empty($payload['next'])) break;
+          }
+
+          if (!is_array($client)) { echo "client_found=no\n"; exit(2); }
+          echo "client_found=yes\n";
+          $ids = pr_identifiers_from_client($client);
+          echo 'client_service_present=' . (($ids['service_id'] ?? '') !== '' ? 'yes' : 'no') . PHP_EOL;
+          echo 'client_id_present=' . (($ids['client_id'] ?? '') !== '' ? 'yes' : 'no') . PHP_EOL;
+          echo 'client_username_match=' . (($ids['username'] ?? '') === $targetUsername ? 'yes' : 'no') . PHP_EOL;
+          echo 'client_phone_present=' . (($ids['phone'] ?? '') !== '' ? 'yes' : 'no') . PHP_EOL;
+
+          $restriction = pr_find_active_restriction($ids);
+          echo 'restriction_from_client_ids=' . (is_array($restriction) ? 'yes' : 'no') . PHP_EOL;
+          if (is_array($restriction)) echo 'restriction_until=' . substr((string)($restriction['ends_at'] ?? ''), 0, 10) . PHP_EOL;
+
+          $serviceId = trim((string)($ids['service_id'] ?? ''));
+          if ($serviceId === '') exit(3);
+
+          // Find promises for this service and use their invoice as the exact backend test target.
+          $promisePayload = diag_get(rtrim(WISPHUB_API_URL, '/') . '/promesas-de-pago/?cliente=' . rawurlencode($serviceId) . '&limit=100');
+          $promises = [];
+          if (is_array($promisePayload)) {
+              $promises = is_array($promisePayload['results'] ?? null) ? $promisePayload['results'] : (array_is_list($promisePayload) ? $promisePayload : [$promisePayload]);
+          }
+          echo 'promise_count=' . count($promises) . PHP_EOL;
+
+          $invoiceId = '';
+          foreach (array_reverse($promises) as $promise) {
+              if (!is_array($promise)) continue;
+              foreach (['id_factura','factura_id','invoice_id'] as $key) {
+                  if (!empty($promise[$key])) { $invoiceId = pr_scalar_id($promise[$key]); break 2; }
+              }
+              if (!empty($promise['factura'])) {
+                  $invoiceId = pr_scalar_id($promise['factura']);
+                  if ($invoiceId !== '') break;
+              }
+          }
+
+          // Fallback: locate a pending invoice for the service.
+          if ($invoiceId === '') {
+              foreach (['id_servicio','servicio','cliente'] as $param) {
+                  $invoicePayload = diag_get(rtrim(WISPHUB_API_URL, '/') . '/facturas/?' . $param . '=' . rawurlencode($serviceId) . '&limit=50');
+                  if (!is_array($invoicePayload)) continue;
+                  $items = is_array($invoicePayload['results'] ?? null) ? $invoicePayload['results'] : (array_is_list($invoicePayload) ? $invoicePayload : [$invoicePayload]);
+                  foreach ($items as $inv) {
+                      if (!is_array($inv)) continue;
+                      $candidateId = pr_scalar_id(pr_first_value($inv, ['id_factura','id','pk'], ''));
+                      if ($candidateId !== '') { $invoiceId = $candidateId; break 2; }
+                  }
+              }
+          }
+
+          echo 'invoice_id_found=' . ($invoiceId !== '' ? 'yes' : 'no') . PHP_EOL;
+          if ($invoiceId === '') exit(4);
+          $invoice = diag_get(rtrim(WISPHUB_API_URL, '/') . '/facturas/' . rawurlencode($invoiceId) . '/');
+          if (!is_array($invoice)) { echo "invoice_fetch=no\n"; exit(5); }
+          echo "invoice_fetch=yes\n";
+
+          $invoiceIds = diag_invoice_identifiers($invoice);
+          echo 'invoice_service_present=' . (($invoiceIds['service_id'] ?? '') !== '' ? 'yes' : 'no') . PHP_EOL;
+          echo 'invoice_service_matches_client=' . (($invoiceIds['service_id'] ?? '') !== '' && ($invoiceIds['service_id'] ?? '') === ($ids['service_id'] ?? '') ? 'yes' : 'no') . PHP_EOL;
+          echo 'invoice_client_id_present=' . (($invoiceIds['client_id'] ?? '') !== '' ? 'yes' : 'no') . PHP_EOL;
+          echo 'invoice_client_id_matches=' . (($invoiceIds['client_id'] ?? '') !== '' && ($invoiceIds['client_id'] ?? '') === ($ids['client_id'] ?? '') ? 'yes' : 'no') . PHP_EOL;
+          echo 'invoice_username_present=' . (($invoiceIds['username'] ?? '') !== '' ? 'yes' : 'no') . PHP_EOL;
+          echo 'invoice_username_matches=' . (($invoiceIds['username'] ?? '') !== '' && ($invoiceIds['username'] ?? '') === ($ids['username'] ?? '') ? 'yes' : 'no') . PHP_EOL;
+          echo 'invoice_phone_present=' . (($invoiceIds['phone'] ?? '') !== '' ? 'yes' : 'no') . PHP_EOL;
+          echo 'invoice_phone_matches=' . (($invoiceIds['phone'] ?? '') !== '' && ($invoiceIds['phone'] ?? '') === ($ids['phone'] ?? '') ? 'yes' : 'no') . PHP_EOL;
+          echo 'restriction_from_invoice_ids=' . (is_array(pr_find_active_restriction($invoiceIds)) ? 'yes' : 'no') . PHP_EOL;
+
+          // Report invoice shape, not values, so we can repair the extractor safely.
+          echo 'invoice_top_keys=' . implode(',', array_keys($invoice)) . PHP_EOL;
+          if (array_key_exists('cliente', $invoice)) {
+              echo 'invoice_cliente_type=' . (is_array($invoice['cliente']) ? 'array' : gettype($invoice['cliente'])) . PHP_EOL;
+              if (is_array($invoice['cliente'])) echo 'invoice_cliente_keys=' . implode(',', array_keys($invoice['cliente'])) . PHP_EOL;
+          }
+          ?>
+          PHP
+          REMOTE
