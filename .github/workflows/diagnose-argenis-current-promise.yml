@@ -1,0 +1,104 @@
+name: Diagnose Argenis Current Promise
+
+on:
+  push:
+    branches: ['diag/argenis-promise-restriction-match']
+    paths:
+      - '.github/workflows/diagnose-argenis-current-promise.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_diag2
+          chmod 600 ~/.ssh/hostinger_diag2
+          ssh-keygen -y -f ~/.ssh/hostinger_diag2 >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Inspect exact client current promise and restriction gate
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_diag2 -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/domains/wifirapidito.com/public_html"
+          php <<'PHP'
+          <?php
+          require __DIR__ . '/config_wisphub.php';
+          require __DIR__ . '/promise_restrictions_lib.php';
+          $target = 'argenisveitia';
+
+          function gx(string $url): ?array {
+              $ch=curl_init($url);
+              curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>['Authorization: Api-Key '.WISPHUB_TOKEN,'Accept: application/json'],CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);
+              $body=curl_exec($ch);$http=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
+              if($http<200||$http>=300||!is_string($body)){echo 'get_http='.$http.PHP_EOL;return null;}
+              $d=json_decode($body,true);return is_array($d)?$d:null;
+          }
+
+          $client=null;$offset=0;
+          for($p=0;$p<40;$p++){
+              $d=gx(rtrim(WISPHUB_API_URL,'/').'/clientes/?limit=300&offset='.$offset);if(!$d)break;
+              $items=is_array($d['results']??null)?$d['results']:(array_is_list($d)?$d:[$d]);
+              foreach($items as $c){if(is_array($c)&&pr_normalize_username(pr_first_value($c,['usuario','usuario_portal','username'],''))===$target){$client=$c;break 2;}}
+              $n=count($items);if(!$n)break;$offset+=$n;$total=isset($d['count'])&&is_numeric($d['count'])?(int)$d['count']:null;if($total!==null&&$offset>=$total)break;
+          }
+          if(!is_array($client)){echo "client=no\n";exit(2);} echo "client=yes\n";
+          $ids=pr_identifiers_from_client($client);$sid=(string)($ids['service_id']??'');
+          echo 'sid_present='.($sid!==''?'yes':'no').PHP_EOL;
+          echo 'stored_restriction='.(is_array(pr_find_active_restriction($ids))?'yes':'no').PHP_EOL;
+
+          $detail=gx(rtrim(WISPHUB_API_URL,'/').'/clientes/'.rawurlencode($sid).'/');
+          echo 'client_detail='.(is_array($detail)?'yes':'no').PHP_EOL;
+          $promise=is_array($detail['promesa_pago']??null)?$detail['promesa_pago']:null;
+          echo 'current_promise='.(is_array($promise)?'yes':'no').PHP_EOL;
+          if(is_array($promise)){
+              echo 'promise_keys='.implode(',',array_keys($promise)).PHP_EOL;
+              $invId='';
+              foreach(['id_factura','factura_id','invoice_id'] as $k){if(isset($promise[$k])&&$promise[$k]!==''){$invId=pr_scalar_id($promise[$k]);break;}}
+              if($invId===''&&isset($promise['factura']))$invId=pr_scalar_id($promise['factura']);
+              echo 'promise_invoice_id=' . ($invId!==''?'yes':'no') . PHP_EOL;
+              if($invId!==''){
+                  $invoice=gx(rtrim(WISPHUB_API_URL,'/').'/facturas/'.rawurlencode($invId).'/');
+                  echo 'promise_invoice_fetch='.(is_array($invoice)?'yes':'no').PHP_EOL;
+                  if(is_array($invoice)){
+                      $cli=is_array($invoice['cliente']??null)?$invoice['cliente']:[];
+                      $iun=pr_normalize_username(pr_first_value($cli,['usuario','usuario_portal','username'],''));
+                      $iph=pr_normalize_phone(pr_first_value($cli,['telefono','movil','celular','phone'],''));
+                      $artServices=[];
+                      foreach(($invoice['articulos']??[]) as $art){if(!is_array($art))continue;$svc=pr_scalar_id($art['servicio']??'');if($svc!=='')$artServices[]=$svc;}
+                      echo 'invoice_username_matches='.($iun===$target?'yes':'no').PHP_EOL;
+                      echo 'invoice_phone_matches='.(($iph!==''&&$iph===($ids['phone']??''))?'yes':'no').PHP_EOL;
+                      echo 'invoice_article_service_matches='.(in_array($sid,$artServices,true)?'yes':'no').PHP_EOL;
+                      $backendIds=['service_id'=>'','client_id'=>'','username'=>$iun,'phone'=>$iph];
+                      echo 'restriction_from_current_invoice='.(is_array(pr_find_active_restriction($backendIds))?'yes':'no').PHP_EOL;
+                  }
+              }
+          }
+
+          $query=http_build_query(['action'=>'check','service_id'=>$sid,'username'=>$target]);
+          $ch=curl_init('https://wifirapidito.com/promise_restrictions.php?'.$query);
+          curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>15,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);
+          $body=curl_exec($ch);$http=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
+          $pub=json_decode((string)$body,true);
+          echo 'public_gate_http='.$http.PHP_EOL;
+          echo 'public_gate_blocked='.(is_array($pub)&&!empty($pub['blocked'])?'yes':'no').PHP_EOL;
+          ?>
+          PHP
+          REMOTE
