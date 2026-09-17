@@ -1,0 +1,65 @@
+name: Diagnose Live Promise Proxy
+
+on:
+  push:
+    branches: ['diag/argenis-promise-restriction-match']
+    paths:
+      - '.github/workflows/diagnose-live-promise-proxy.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_live_proxy
+          chmod 600 ~/.ssh/hostinger_live_proxy
+          ssh-keygen -y -f ~/.ssh/hostinger_live_proxy >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Verify live enforcement markers and simulate only the guard
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_live_proxy -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/domains/wifirapidito.com/public_html"
+          cd "$BASE"
+          test -s proxy_promises.php
+          echo 'live_version_marker='$(grep -o "3\.5-wisphub-promise-date-format" proxy_promises.php | head -1 || true)
+          echo 'requires_restriction_lib='$(grep -c "promise_restrictions_lib.php" proxy_promises.php || true)
+          echo 'has_active_guard='$(grep -c "pr_find_active_restriction" proxy_promises.php || true)
+          echo 'has_http_423='$(grep -c "promiseRespond(423" proxy_promises.php || true)
+          echo 'has_wisphub_create='$(grep -c "promesa-pago" proxy_promises.php || true)
+
+          # Confirm the restricted account is still present in the private store and active.
+          php <<'PHP'
+          <?php
+          require __DIR__ . '/promise_restrictions_lib.php';
+          $found=false;
+          foreach(pr_load_records() as $r){
+              if(pr_normalize_username($r['username']??'')==='argenisveitia' && pr_record_is_active($r)){
+                  $found=true;
+                  echo 'active_record=yes'.PHP_EOL;
+                  echo 'blocked_until='.substr((string)($r['ends_at']??''),0,10).PHP_EOL;
+                  break;
+              }
+          }
+          if(!$found){echo 'active_record=no'.PHP_EOL;exit(10);}
+          ?>
+          PHP
+          REMOTE
