@@ -20,7 +20,7 @@ function promiseRespond($status, $payload) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['health'])) {
-    promiseRespond(200, ['status' => 'ready', 'version' => '3.4-wisphub-promise-contract']);
+    promiseRespond(200, ['status' => 'ready', 'version' => '3.5-wisphub-promise-date-format']);
 }
 
 require_once __DIR__ . '/config_wisphub.php';
@@ -99,8 +99,8 @@ function normalizePromiseDeadline($value) {
         $valid = $date instanceof DateTime
             && ($errors === false || (($errors['warning_count'] ?? 0) === 0 && ($errors['error_count'] ?? 0) === 0));
         if ($valid) {
-            // WispHub documents fecha_limite as YYYY/MM/DD.
-            return $date->format('Y/m/d');
+            // WispHub accepts fecha_limite as YYYY-MM-DD or YYYY-MM-DD hh:mm.
+            return $date->format('Y-m-d');
         }
     }
 
@@ -215,8 +215,8 @@ if ($activeRestriction) {
     ]);
 }
 
-// WispHub's documented POST /api/promesa-pago/ contract is:
-// id_factura, fecha_limite (YYYY/MM/DD), comentarios and accion (0|1).
+// WispHub's POST /api/promesa-pago/ contract is:
+// id_factura, fecha_limite (YYYY-MM-DD or YYYY-MM-DD hh:mm), comentarios and accion (0|1).
 // Do not translate these fields to the response names "factura" or
 // "fecha_limite_de_pago"; those are not accepted by the create endpoint.
 $action = (int) ($data['accion'] ?? 1);
