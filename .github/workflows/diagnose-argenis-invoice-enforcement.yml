@@ -1,0 +1,69 @@
+name: Diagnose Argenis Invoice Enforcement
+
+on:
+  push:
+    branches: ['diag/argenis-promise-restriction-match']
+    paths:
+      - '.github/workflows/diagnose-argenis-invoice-enforcement.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Hostinger SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/hostinger_invoice_diag
+          chmod 600 ~/.ssh/hostinger_invoice_diag
+          ssh-keygen -y -f ~/.ssh/hostinger_invoice_diag >/dev/null
+          ssh-keyscan -T 10 -p 65002 -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Check every invoice belonging to the restricted username
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/hostinger_invoice_diag -p 65002 "$HOSTINGER_USER@$HOSTINGER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/domains/wifirapidito.com/public_html"
+          php <<'PHP'
+          <?php
+          require __DIR__ . '/config_wisphub.php';
+          require __DIR__ . '/promise_restrictions_lib.php';
+          $target='argenisveitia';
+          function getPage(string $url): ?array {
+              $ch=curl_init($url);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>['Authorization: Api-Key '.WISPHUB_TOKEN,'Accept: application/json'],CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);$b=curl_exec($ch);$h=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);if($h<200||$h>=300||!is_string($b))return null;$d=json_decode($b,true);return is_array($d)?$d:null;
+          }
+          function idsFromInvoice(array $invoice): array {
+              $client=is_array($invoice['cliente']??null)?$invoice['cliente']:[];
+              $serviceId=pr_scalar_id(pr_first_value($invoice,['id_servicio','servicio_id','servicio'],''));
+              if($serviceId===''&&isset($client['id_servicio']))$serviceId=(string)$client['id_servicio'];
+              $clientId=pr_scalar_id(pr_first_value($invoice,['id_cliente','cliente_id'],''));
+              if($clientId==='')$clientId=pr_scalar_id(pr_first_value($client,['id_cliente','id','pk'],''));
+              return ['service_id'=>trim((string)$serviceId),'client_id'=>trim((string)$clientId),'username'=>pr_normalize_username(pr_first_value($client,['usuario','usuario_portal','username'],'')),'phone'=>pr_normalize_phone(pr_first_value($client,['telefono','movil','celular','phone'],''))];
+          }
+          $next=rtrim(WISPHUB_API_URL,'/').'/facturas/?limit=300';$pages=0;$owned=0;$blocked=0;$unblocked=0;$articleMatches=0;
+          while($next&&$pages<15){$pages++;$d=getPage($next);if(!$d)break;$items=$d['results']??[];foreach($items as $inv){if(!is_array($inv))continue;$client=is_array($inv['cliente']??null)?$inv['cliente']:[];$username=pr_normalize_username(pr_first_value($client,['usuario','usuario_portal','username'],''));if($username!==$target)continue;$owned++;$ids=idsFromInvoice($inv);$isBlocked=is_array(pr_find_active_restriction($ids));if($isBlocked)$blocked++;else $unblocked++;foreach(($inv['articulos']??[]) as $art){if(!is_array($art))continue;$svc=pr_scalar_id($art['servicio']??'');if($svc!==''){$full=['service_id'=>$svc,'client_id'=>$ids['client_id'],'username'=>$ids['username'],'phone'=>$ids['phone']];if(is_array(pr_find_active_restriction($full)))$articleMatches++;break;}}}
+              $next=$d['next']??null;if($next)$next=str_replace(['http://','wisphub.net'],['https://','wisphub.app'],$next);
+          }
+          echo 'pages='.$pages.PHP_EOL;
+          echo 'argenis_invoices='.$owned.PHP_EOL;
+          echo 'current_extractor_blocked='.$blocked.PHP_EOL;
+          echo 'current_extractor_unblocked='.$unblocked.PHP_EOL;
+          echo 'article_service_would_block='.$articleMatches.PHP_EOL;
+          if($owned>0&&$unblocked>0)exit(10);
+          ?>
+          PHP
+          REMOTE
