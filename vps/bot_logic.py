@@ -416,6 +416,7 @@ async def health_or_meta_verification(request: Request):
 
 
 @app.post("/webhook")
+@app.post("/webhook-whatsapp")
 async def recibir_mensaje(request: Request, background_tasks: BackgroundTasks):
     raw_body = await request.body()
     try:
