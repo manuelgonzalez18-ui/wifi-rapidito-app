@@ -80,12 +80,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
           ssh-keyscan -T 10 -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          if ! ssh -i ~/.ssh/vps_deploy -p "$VPS_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$VPS_USER@$VPS_HOST" 'true'; then
-            echo "SSH authentication failed for root. Public key derived from BOT_VPS_SSH_KEY_B64 follows:"
-            ssh-keygen -y -f ~/.ssh/vps_deploy
-            exit 1
-          fi
-
+          ssh -i ~/.ssh/vps_deploy -p "$VPS_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$VPS_USER@$VPS_HOST" 'true'
           printf 'RAPIDITO_VPS_PORT=%s\nRAPIDITO_VPS_USER=%s\n' "$VPS_PORT" "$VPS_USER" >> "$GITHUB_ENV"
 
       - name: Backup and deploy restriction backend
@@ -143,45 +138,56 @@ jobs:
             done < <(find "$base" -maxdepth 6 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null)
           done
 
-          if [ -z "$compose_file" ]; then
-            echo "Could not locate the Rapidito bot docker compose project on the VPS."
+          app_dir=""
+          target=""
+          if [ -n "$compose_file" ]; then
+            app_dir="$(dirname "$compose_file")"
+            target="$app_dir/bot_logic.py"
+            backup="$app_dir/.bot_logic.py.$(date +%Y%m%d-%H%M%S).bak"
+            if [ -f "$target" ]; then
+              cp "$target" "$backup"
+            fi
+            cp "$REMOTE_TMP" "$target.next"
+            python3 -m py_compile "$target.next"
+            mv "$target.next" "$target"
+          fi
+
+          if docker inspect bot_backend >/dev/null 2>&1; then
+            echo "Existing bot_backend container found; updating it directly."
+            docker cp "$REMOTE_TMP" bot_backend:/app/bot_logic.py
+            docker restart bot_backend >/dev/null
             rm -f "$REMOTE_TMP"
-            exit 1
-          fi
-
-          app_dir="$(dirname "$compose_file")"
-          target="$app_dir/bot_logic.py"
-          backup="$app_dir/.bot_logic.py.$(date +%Y%m%d-%H%M%S).bak"
-
-          if [ -f "$target" ]; then
-            cp "$target" "$backup"
-          fi
-          cp "$REMOTE_TMP" "$target.next"
-          python3 -m py_compile "$target.next"
-          mv "$target.next" "$target"
-          rm -f "$REMOTE_TMP"
-
-          cd "$app_dir"
-          if docker compose version >/dev/null 2>&1; then
-            docker compose up -d --build bot_backend
-          elif command -v docker-compose >/dev/null 2>&1; then
-            docker-compose up -d --build bot_backend
           else
-            echo "Docker Compose is not available on the VPS."
-            exit 1
+            if [ -z "$compose_file" ]; then
+              echo "No bot_backend container and no compose project were found."
+              rm -f "$REMOTE_TMP"
+              exit 1
+            fi
+            rm -f "$REMOTE_TMP"
+            cd "$app_dir"
+            if docker compose version >/dev/null 2>&1 && docker compose config >/dev/null 2>&1; then
+              docker compose up -d --build bot_backend
+            elif command -v docker-compose >/dev/null 2>&1 && docker-compose config >/dev/null 2>&1; then
+              docker-compose up -d --build bot_backend
+            else
+              echo "Compose file is invalid and bot_backend does not already exist."
+              exit 1
+            fi
           fi
 
           for attempt in $(seq 1 20); do
             if docker inspect -f '{{.State.Running}}' bot_backend 2>/dev/null | grep -qx true \
+              && docker exec bot_backend python -m py_compile /app/bot_logic.py >/dev/null 2>&1 \
               && docker exec bot_backend grep -q 'Podrás solicitar nuevamente una Promesa de Pago a partir' /app/bot_logic.py 2>/dev/null; then
               echo "Rapidito bot deployed, restarted and verified."
+              docker logs --tail 30 bot_backend 2>&1 || true
               exit 0
             fi
             sleep 3
           done
 
           echo "Rapidito bot verification failed after restart."
-          docker logs --tail 80 bot_backend 2>&1 || true
+          docker logs --tail 100 bot_backend 2>&1 || true
           exit 1
           REMOTE
 
