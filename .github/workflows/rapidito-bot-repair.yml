@@ -17,7 +17,7 @@ permissions:
 jobs:
   repair:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,21 +61,42 @@ jobs:
           ssh -i ~/.ssh/rapidito_vps -p "$RAPIDITO_PORT" "root@$RAPIDITO_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
 
-          compose_file=""
+          if command -v systemctl >/dev/null 2>&1; then
+            systemctl enable --now docker
+          fi
+          for attempt in $(seq 1 20); do
+            if docker info >/dev/null 2>&1; then
+              echo 'Docker daemon is running.'
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then
+              echo 'Docker daemon could not be started.'
+              systemctl status docker --no-pager 2>&1 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          preferred=""
+          fallback=""
           for base in /root /opt /srv; do
             [ -d "$base" ] || continue
             while IFS= read -r candidate; do
-              if grep -q 'container_name:[[:space:]]*bot_backend' "$candidate" 2>/dev/null; then
-                compose_file="$candidate"
-                break 2
-              fi
+              grep -q 'container_name:[[:space:]]*bot_backend' "$candidate" 2>/dev/null || continue
+              [ -n "$fallback" ] || fallback="$candidate"
+              case "$candidate" in
+                *backup*|*.repair-backups/*) ;;
+                *) preferred="$candidate"; break 2 ;;
+              esac
             done < <(find "$base" -maxdepth 6 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null)
           done
+          compose_file="${preferred:-$fallback}"
 
           if [ -z "$compose_file" ]; then
             echo 'Rapidito compose project was not found on the VPS.'
             exit 1
           fi
+          echo "Using Rapidito project: $(dirname "$compose_file")"
 
           app_dir="$(dirname "$compose_file")"
           stamp="$(date +%Y%m%d-%H%M%S)"
