@@ -1,0 +1,131 @@
+name: Rapidito Bot Repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rapidito-bot-repair.yml'
+      - 'vps/bot_logic.py'
+      - 'vps/kommo_service.py'
+      - 'vps/Dockerfile.bot'
+      - 'vps/docker-compose.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure VPS SSH
+        env:
+          VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+          VPS_PORT_RAW: ${{ secrets.BOT_VPS_PORT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_SSH_KEY_B64"
+          VPS_PORT="$(printf '%s' "$VPS_PORT_RAW" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if ! [[ "$VPS_PORT" =~ ^[0-9]{1,5}$ ]] || [ "$VPS_PORT" -lt 1 ] || [ "$VPS_PORT" -gt 65535 ]; then
+            VPS_PORT=22
+          fi
+          mkdir -p ~/.ssh
+          printf '%s' "$VPS_SSH_KEY_B64" | tr -d '\r\n ' | base64 --decode > ~/.ssh/rapidito_vps
+          chmod 600 ~/.ssh/rapidito_vps
+          ssh-keygen -y -f ~/.ssh/rapidito_vps >/dev/null
+          ssh-keyscan -T 10 -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/rapidito_vps -p "$VPS_PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$VPS_HOST" 'true'
+          printf 'RAPIDITO_HOST=%s\nRAPIDITO_PORT=%s\n' "$VPS_HOST" "$VPS_PORT" >> "$GITHUB_ENV"
+
+      - name: Upload repair files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in bot_logic.py kommo_service.py Dockerfile.bot docker-compose.yml .env; do
+            scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" "vps/$file" "root@$RAPIDITO_HOST:/tmp/rapidito-$file"
+          done
+
+      - name: Repair and restart Rapidito
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/rapidito_vps -p "$RAPIDITO_PORT" "root@$RAPIDITO_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+
+          compose_file=""
+          for base in /root /opt /srv; do
+            [ -d "$base" ] || continue
+            while IFS= read -r candidate; do
+              if grep -q 'container_name:[[:space:]]*bot_backend' "$candidate" 2>/dev/null; then
+                compose_file="$candidate"
+                break 2
+              fi
+            done < <(find "$base" -maxdepth 6 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null)
+          done
+
+          if [ -z "$compose_file" ]; then
+            app_dir="/opt/wifi-rapidito"
+            mkdir -p "$app_dir"
+            compose_file="$app_dir/docker-compose.yml"
+          else
+            app_dir="$(dirname "$compose_file")"
+          fi
+
+          stamp="$(date +%Y%m%d-%H%M%S)"
+          mkdir -p "$app_dir/.repair-backups"
+          for f in docker-compose.yml Dockerfile.bot bot_logic.py kommo_service.py; do
+            [ -f "$app_dir/$f" ] && cp "$app_dir/$f" "$app_dir/.repair-backups/$f.$stamp.bak" || true
+          done
+
+          cp /tmp/rapidito-docker-compose.yml "$app_dir/docker-compose.yml"
+          cp /tmp/rapidito-Dockerfile.bot "$app_dir/Dockerfile.bot"
+          cp /tmp/rapidito-bot_logic.py "$app_dir/bot_logic.py"
+          cp /tmp/rapidito-kommo_service.py "$app_dir/kommo_service.py"
+          if [ ! -s "$app_dir/.env" ]; then
+            cp /tmp/rapidito-.env "$app_dir/.env"
+            chmod 600 "$app_dir/.env"
+          fi
+          rm -f /tmp/rapidito-bot_logic.py /tmp/rapidito-kommo_service.py /tmp/rapidito-Dockerfile.bot /tmp/rapidito-docker-compose.yml /tmp/rapidito-.env
+
+          python3 -m py_compile "$app_dir/bot_logic.py" "$app_dir/kommo_service.py"
+          cd "$app_dir"
+
+          if docker compose version >/dev/null 2>&1; then
+            docker compose config >/dev/null
+            docker compose up -d --build bot_backend
+          elif command -v docker-compose >/dev/null 2>&1; then
+            docker-compose config >/dev/null
+            docker-compose up -d --build bot_backend
+          else
+            echo 'Docker Compose is not installed.'
+            exit 1
+          fi
+
+          for attempt in $(seq 1 30); do
+            if docker inspect -f '{{.State.Running}}' bot_backend 2>/dev/null | grep -qx true \
+              && docker exec bot_backend python -m py_compile /app/bot_logic.py >/dev/null 2>&1; then
+              echo 'Rapidito bot container is running.'
+              docker exec bot_backend python - <<'PY'
+import os
+print('WHATSAPP_PROVIDER=' + os.getenv('WHATSAPP_PROVIDER', 'evolution'))
+print('META_CONFIGURED=' + str(bool(os.getenv('META_ACCESS_TOKEN') and os.getenv('META_PHONE_NUMBER_ID'))).lower())
+PY
+              curl -fsS http://127.0.0.1:5000/webhook || true
+              echo
+              docker logs --tail 50 bot_backend 2>&1 || true
+              exit 0
+            fi
+            sleep 4
+          done
+
+          echo 'Rapidito bot did not become healthy.'
+          docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+          docker logs --tail 120 bot_backend 2>&1 || true
+          exit 1
+          REMOTE
