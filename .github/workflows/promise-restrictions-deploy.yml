@@ -59,14 +59,13 @@ jobs:
         if: github.event_name == 'push'
         env:
           VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
-          VPS_USER: ${{ secrets.BOT_VPS_USER }}
           VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
           VPS_PORT_RAW: ${{ secrets.BOT_VPS_PORT }}
         shell: bash
         run: |
           set -euo pipefail
+          VPS_USER="root"
           test -n "$VPS_HOST" || { echo "Missing BOT_VPS_HOST secret"; exit 1; }
-          test -n "$VPS_USER" || { echo "Missing BOT_VPS_USER secret"; exit 1; }
           test -n "$VPS_SSH_KEY_B64" || { echo "Missing BOT_VPS_SSH_KEY_B64 secret"; exit 1; }
 
           VPS_PORT="$(printf '%s' "$VPS_PORT_RAW" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -80,7 +79,14 @@ jobs:
           chmod 600 ~/.ssh/vps_deploy
           ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
           ssh-keyscan -T 10 -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          printf 'RAPIDITO_VPS_PORT=%s\n' "$VPS_PORT" >> "$GITHUB_ENV"
+
+          if ! ssh -i ~/.ssh/vps_deploy -p "$VPS_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$VPS_USER@$VPS_HOST" 'true'; then
+            echo "SSH authentication failed for root. Public key derived from BOT_VPS_SSH_KEY_B64 follows:"
+            ssh-keygen -y -f ~/.ssh/vps_deploy
+            exit 1
+          fi
+
+          printf 'RAPIDITO_VPS_PORT=%s\nRAPIDITO_VPS_USER=%s\n' "$VPS_PORT" "$VPS_USER" >> "$GITHUB_ENV"
 
       - name: Backup and deploy restriction backend
         if: github.event_name == 'push'
@@ -111,11 +117,11 @@ jobs:
         if: github.event_name == 'push'
         env:
           VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
-          VPS_USER: ${{ secrets.BOT_VPS_USER }}
         shell: bash
         run: |
           set -euo pipefail
           VPS_PORT="${RAPIDITO_VPS_PORT:-22}"
+          VPS_USER="${RAPIDITO_VPS_USER:-root}"
           remote_tmp="/tmp/wifi-rapidito-bot_logic.py.$GITHUB_SHA"
 
           scp -i ~/.ssh/vps_deploy -P "$VPS_PORT" \
