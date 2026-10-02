@@ -47,9 +47,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for file in bot_logic.py kommo_service.py Dockerfile.bot docker-compose.yml .env; do
-            scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" "vps/$file" "root@$RAPIDITO_HOST:/tmp/rapidito-$file"
-          done
+          scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/bot_logic.py "root@$RAPIDITO_HOST:/tmp/rapidito-bot_logic.py"
+          scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/kommo_service.py "root@$RAPIDITO_HOST:/tmp/rapidito-kommo_service.py"
+          scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/Dockerfile.bot "root@$RAPIDITO_HOST:/tmp/rapidito-Dockerfile.bot"
+          scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/docker-compose.yml "root@$RAPIDITO_HOST:/tmp/rapidito-docker-compose.yml"
 
       - name: Repair and restart Rapidito
         shell: bash
@@ -70,11 +71,14 @@ jobs:
           done
 
           if [ -z "$compose_file" ]; then
-            app_dir="/opt/wifi-rapidito"
-            mkdir -p "$app_dir"
-            compose_file="$app_dir/docker-compose.yml"
-          else
-            app_dir="$(dirname "$compose_file")"
+            echo 'Rapidito compose project was not found on the VPS.'
+            exit 1
+          fi
+
+          app_dir="$(dirname "$compose_file")"
+          if [ ! -s "$app_dir/.env" ]; then
+            echo 'Rapidito .env is missing on the VPS; refusing to replace it with repository data.'
+            exit 1
           fi
 
           stamp="$(date +%Y%m%d-%H%M%S)"
@@ -87,11 +91,7 @@ jobs:
           cp /tmp/rapidito-Dockerfile.bot "$app_dir/Dockerfile.bot"
           cp /tmp/rapidito-bot_logic.py "$app_dir/bot_logic.py"
           cp /tmp/rapidito-kommo_service.py "$app_dir/kommo_service.py"
-          if [ ! -s "$app_dir/.env" ]; then
-            cp /tmp/rapidito-.env "$app_dir/.env"
-            chmod 600 "$app_dir/.env"
-          fi
-          rm -f /tmp/rapidito-bot_logic.py /tmp/rapidito-kommo_service.py /tmp/rapidito-Dockerfile.bot /tmp/rapidito-docker-compose.yml /tmp/rapidito-.env
+          rm -f /tmp/rapidito-bot_logic.py /tmp/rapidito-kommo_service.py /tmp/rapidito-Dockerfile.bot /tmp/rapidito-docker-compose.yml
 
           python3 -m py_compile "$app_dir/bot_logic.py" "$app_dir/kommo_service.py"
           cd "$app_dir"
@@ -111,11 +111,7 @@ jobs:
             if docker inspect -f '{{.State.Running}}' bot_backend 2>/dev/null | grep -qx true \
               && docker exec bot_backend python -m py_compile /app/bot_logic.py >/dev/null 2>&1; then
               echo 'Rapidito bot container is running.'
-              docker exec bot_backend python - <<'PY'
-import os
-print('WHATSAPP_PROVIDER=' + os.getenv('WHATSAPP_PROVIDER', 'evolution'))
-print('META_CONFIGURED=' + str(bool(os.getenv('META_ACCESS_TOKEN') and os.getenv('META_PHONE_NUMBER_ID'))).lower())
-PY
+              docker exec bot_backend sh -lc 'printf "WHATSAPP_PROVIDER=%s\n" "${WHATSAPP_PROVIDER:-evolution}"; if [ -n "${META_ACCESS_TOKEN:-}" ] && [ -n "${META_PHONE_NUMBER_ID:-}" ]; then echo META_CONFIGURED=true; else echo META_CONFIGURED=false; fi'
               curl -fsS http://127.0.0.1:5000/webhook || true
               echo
               docker logs --tail 50 bot_backend 2>&1 || true
