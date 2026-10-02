@@ -60,17 +60,17 @@ jobs:
         env:
           VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
           VPS_USER: ${{ secrets.BOT_VPS_USER }}
-          VPS_SSH_KEY: ${{ secrets.BOT_VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
           VPS_PORT: ${{ secrets.BOT_VPS_PORT }}
         shell: bash
         run: |
           set -euo pipefail
           test -n "$VPS_HOST" || { echo "Missing BOT_VPS_HOST secret"; exit 1; }
           test -n "$VPS_USER" || { echo "Missing BOT_VPS_USER secret"; exit 1; }
-          test -n "$VPS_SSH_KEY" || { echo "Missing BOT_VPS_SSH_KEY secret"; exit 1; }
+          test -n "$VPS_SSH_KEY_B64" || { echo "Missing BOT_VPS_SSH_KEY_B64 secret"; exit 1; }
           VPS_PORT="${VPS_PORT:-22}"
           mkdir -p ~/.ssh
-          printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/vps_deploy
+          printf '%s' "$VPS_SSH_KEY_B64" | tr -d '\r\n ' | base64 --decode > ~/.ssh/vps_deploy
           chmod 600 ~/.ssh/vps_deploy
           ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
           ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
