@@ -9,6 +9,7 @@ on:
       - 'vps/kommo_service.py'
       - 'vps/Dockerfile.bot'
       - 'vps/docker-compose.yml'
+      - 'vps/.env'
 
 permissions:
   contents: read
@@ -51,6 +52,7 @@ jobs:
           scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/kommo_service.py "root@$RAPIDITO_HOST:/tmp/rapidito-kommo_service.py"
           scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/Dockerfile.bot "root@$RAPIDITO_HOST:/tmp/rapidito-Dockerfile.bot"
           scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/docker-compose.yml "root@$RAPIDITO_HOST:/tmp/rapidito-docker-compose.yml"
+          scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/.env "root@$RAPIDITO_HOST:/tmp/rapidito.env"
 
       - name: Repair and restart Rapidito
         shell: bash
@@ -76,14 +78,9 @@ jobs:
           fi
 
           app_dir="$(dirname "$compose_file")"
-          if [ ! -s "$app_dir/.env" ]; then
-            echo 'Rapidito .env is missing on the VPS; refusing to replace it with repository data.'
-            exit 1
-          fi
-
           stamp="$(date +%Y%m%d-%H%M%S)"
           mkdir -p "$app_dir/.repair-backups"
-          for f in docker-compose.yml Dockerfile.bot bot_logic.py kommo_service.py; do
+          for f in docker-compose.yml Dockerfile.bot bot_logic.py kommo_service.py .env; do
             [ -f "$app_dir/$f" ] && cp "$app_dir/$f" "$app_dir/.repair-backups/$f.$stamp.bak" || true
           done
 
@@ -91,7 +88,12 @@ jobs:
           cp /tmp/rapidito-Dockerfile.bot "$app_dir/Dockerfile.bot"
           cp /tmp/rapidito-bot_logic.py "$app_dir/bot_logic.py"
           cp /tmp/rapidito-kommo_service.py "$app_dir/kommo_service.py"
-          rm -f /tmp/rapidito-bot_logic.py /tmp/rapidito-kommo_service.py /tmp/rapidito-Dockerfile.bot /tmp/rapidito-docker-compose.yml
+          if [ ! -s "$app_dir/.env" ]; then
+            cp /tmp/rapidito.env "$app_dir/.env"
+            chmod 600 "$app_dir/.env"
+            echo 'Rapidito .env restored from repository backup.'
+          fi
+          rm -f /tmp/rapidito-bot_logic.py /tmp/rapidito-kommo_service.py /tmp/rapidito-Dockerfile.bot /tmp/rapidito-docker-compose.yml /tmp/rapidito.env
 
           python3 -m py_compile "$app_dir/bot_logic.py" "$app_dir/kommo_service.py"
           cd "$app_dir"
