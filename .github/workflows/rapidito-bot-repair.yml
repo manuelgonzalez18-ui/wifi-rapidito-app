@@ -8,8 +8,6 @@ on:
       - 'vps/bot_logic.py'
       - 'vps/kommo_service.py'
       - 'vps/Dockerfile.bot'
-      - 'vps/docker-compose.yml'
-      - 'vps/.env'
 
 permissions:
   contents: read
@@ -44,91 +42,67 @@ jobs:
           ssh -i ~/.ssh/rapidito_vps -p "$VPS_PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$VPS_HOST" 'true'
           printf 'RAPIDITO_HOST=%s\nRAPIDITO_PORT=%s\n' "$VPS_HOST" "$VPS_PORT" >> "$GITHUB_ENV"
 
-      - name: Upload repair files
+      - name: Upload bot files
         shell: bash
         run: |
           set -euo pipefail
           scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/bot_logic.py "root@$RAPIDITO_HOST:/tmp/rapidito-bot_logic.py"
           scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/kommo_service.py "root@$RAPIDITO_HOST:/tmp/rapidito-kommo_service.py"
           scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/Dockerfile.bot "root@$RAPIDITO_HOST:/tmp/rapidito-Dockerfile.bot"
-          scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/docker-compose.yml "root@$RAPIDITO_HOST:/tmp/rapidito-docker-compose.yml"
-          scp -i ~/.ssh/rapidito_vps -P "$RAPIDITO_PORT" vps/.env "root@$RAPIDITO_HOST:/tmp/rapidito.env"
 
-      - name: Repair and restart Rapidito
+      - name: Repair live Rapidito project
         shell: bash
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/rapidito_vps -p "$RAPIDITO_PORT" "root@$RAPIDITO_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
 
-          if command -v systemctl >/dev/null 2>&1; then
-            systemctl enable --now docker
-          fi
+          systemctl enable --now docker
           for attempt in $(seq 1 20); do
-            if docker info >/dev/null 2>&1; then
-              echo 'Docker daemon is running.'
-              break
-            fi
-            if [ "$attempt" -eq 20 ]; then
-              echo 'Docker daemon could not be started.'
-              systemctl status docker --no-pager 2>&1 || true
-              exit 1
-            fi
+            docker info >/dev/null 2>&1 && break
+            [ "$attempt" -lt 20 ] || { systemctl status docker --no-pager 2>&1 || true; exit 1; }
             sleep 2
           done
+          echo 'Docker daemon is running.'
 
-          preferred=""
-          fallback=""
-          for base in /root /opt /srv; do
-            [ -d "$base" ] || continue
-            while IFS= read -r candidate; do
-              grep -q 'container_name:[[:space:]]*bot_backend' "$candidate" 2>/dev/null || continue
-              [ -n "$fallback" ] || fallback="$candidate"
-              case "$candidate" in
-                *backup*|*.repair-backups/*) ;;
-                *) preferred="$candidate"; break 2 ;;
-              esac
-            done < <(find "$base" -maxdepth 6 -type f \( -name docker-compose.yml -o -name compose.yml \) 2>/dev/null)
-          done
-          compose_file="${preferred:-$fallback}"
-
-          if [ -z "$compose_file" ]; then
-            echo 'Rapidito compose project was not found on the VPS.'
+          app_dir='/home/bot.local/public_html'
+          compose_file="$app_dir/docker-compose.yml"
+          if [ ! -f "$compose_file" ]; then
+            echo "Live Rapidito compose file not found at $compose_file"
+            find /home -maxdepth 5 -type f \( -name docker-compose.yml -o -name compose.yml \) -print 2>/dev/null || true
             exit 1
           fi
-          echo "Using Rapidito project: $(dirname "$compose_file")"
 
-          app_dir="$(dirname "$compose_file")"
+          echo "Using live Rapidito project: $app_dir"
+          echo 'Configured images:'
+          grep -E '^[[:space:]]*image:' "$compose_file" | sed -E 's/^/  /' || true
+          echo 'Local Docker images:'
+          docker images --format '{{.Repository}}:{{.Tag}}' | sort | sed -n '1,80p'
+
+          cd "$app_dir"
+          if ! docker compose config >/dev/null 2>&1; then
+            echo 'The live docker-compose.yml is invalid.'
+            docker compose config 2>&1 || true
+            exit 1
+          fi
+
+          if [ ! -s "$app_dir/.env" ]; then
+            echo 'The live Rapidito .env file is missing.'
+            exit 1
+          fi
+
           stamp="$(date +%Y%m%d-%H%M%S)"
           mkdir -p "$app_dir/.repair-backups"
-          for f in docker-compose.yml Dockerfile.bot bot_logic.py kommo_service.py .env; do
+          for f in Dockerfile.bot bot_logic.py kommo_service.py; do
             [ -f "$app_dir/$f" ] && cp "$app_dir/$f" "$app_dir/.repair-backups/$f.$stamp.bak" || true
           done
-
-          cp /tmp/rapidito-docker-compose.yml "$app_dir/docker-compose.yml"
           cp /tmp/rapidito-Dockerfile.bot "$app_dir/Dockerfile.bot"
           cp /tmp/rapidito-bot_logic.py "$app_dir/bot_logic.py"
           cp /tmp/rapidito-kommo_service.py "$app_dir/kommo_service.py"
-          if [ ! -s "$app_dir/.env" ]; then
-            cp /tmp/rapidito.env "$app_dir/.env"
-            chmod 600 "$app_dir/.env"
-            echo 'Rapidito .env restored from repository backup.'
-          fi
-          rm -f /tmp/rapidito-bot_logic.py /tmp/rapidito-kommo_service.py /tmp/rapidito-Dockerfile.bot /tmp/rapidito-docker-compose.yml /tmp/rapidito.env
-
+          rm -f /tmp/rapidito-bot_logic.py /tmp/rapidito-kommo_service.py /tmp/rapidito-Dockerfile.bot
           python3 -m py_compile "$app_dir/bot_logic.py" "$app_dir/kommo_service.py"
-          cd "$app_dir"
 
-          if docker compose version >/dev/null 2>&1; then
-            docker compose config >/dev/null
-            docker compose up -d --build bot_backend
-          elif command -v docker-compose >/dev/null 2>&1; then
-            docker-compose config >/dev/null
-            docker-compose up -d --build bot_backend
-          else
-            echo 'Docker Compose is not installed.'
-            exit 1
-          fi
+          docker compose up -d --build bot_backend
 
           for attempt in $(seq 1 30); do
             if docker inspect -f '{{.State.Running}}' bot_backend 2>/dev/null | grep -qx true \
@@ -137,7 +111,7 @@ jobs:
               docker exec bot_backend sh -lc 'printf "WHATSAPP_PROVIDER=%s\n" "${WHATSAPP_PROVIDER:-evolution}"; if [ -n "${META_ACCESS_TOKEN:-}" ] && [ -n "${META_PHONE_NUMBER_ID:-}" ]; then echo META_CONFIGURED=true; else echo META_CONFIGURED=false; fi'
               curl -fsS http://127.0.0.1:5000/webhook || true
               echo
-              docker logs --tail 50 bot_backend 2>&1 || true
+              docker logs --tail 60 bot_backend 2>&1 || true
               exit 0
             fi
             sleep 4
