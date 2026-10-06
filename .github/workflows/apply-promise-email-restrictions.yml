@@ -46,9 +46,21 @@ jobs:
           require 'promise_restrictions_lib.php';
           require 'config_wisphub.php';
 
-          $usernames = [
-              'luzmarinacartagena',
-              'elsacifuentes',
+          $targets = [
+              'alfredopacheco' => '2026-10-01',
+              'wilmaryblanco' => '2026-10-01',
+              'glorimarrequena' => '2026-10-03',
+              'barbarapena' => '2026-10-06',
+              'carlysvegas' => '2026-10-06',
+              'leidycartagena' => '2026-10-06',
+              'charohernandez' => '2026-10-06',
+              'alejandrabaronis' => '2026-10-06',
+              'wilmarysrodriguez' => '2026-10-06',
+              'saturnamanaure' => '2026-10-06',
+              'abelgodoy' => '2026-10-06',
+              'yascarlin sanz' => '2026-10-06',
+              'marialbysurbaneja' => '2026-10-06',
+              'deilymarvelasquez' => '2026-10-06',
           ];
 
           function wh_get_json(string $url): ?array {
@@ -114,16 +126,16 @@ jobs:
           }
 
           $records = pr_load_records();
-          $incident = new DateTimeImmutable('2026-09-30', new DateTimeZone('America/Caracas'));
-          $startsAt = $incident->setTime(0,0,0);
-          $endsAt = pr_add_months_clamped($incident, 3)->setTime(0,0,0);
 
           $created = 0;
           $already = 0;
           $missing = [];
 
-          foreach ($usernames as $username) {
+          foreach ($targets as $username => $incidentDate) {
               $normalized = pr_normalize_username($username);
+              $incident = new DateTimeImmutable($incidentDate, new DateTimeZone('America/Caracas'));
+              $startsAt = $incident->setTime(0,0,0);
+              $endsAt = pr_add_months_clamped($incident, 3)->setTime(0,0,0);
               $client = $byUsername[$normalized] ?? null;
               if (!is_array($client)) {
                   $missing[] = $normalized;
@@ -153,7 +165,7 @@ jobs:
                   'cedula' => trim((string)pr_first_value($client, ['cedula','documento','rif'], '')),
                   'email' => trim((string)pr_first_value($client, ['correo','email'], '')),
                   'reason' => 'Incumplimiento de promesa de pago',
-                  'note' => 'Restricción aplicada desde notificación WispHub de corte por incumplimiento recibida el 2026-09-30.',
+                  'note' => 'Restricción manual por incumplimiento/promesa de pago revisada el ' . $incident->format('Y-m-d') . '.',
                   'incident_date' => $incident->format('Y-m-d'),
                   'starts_at' => $startsAt->format(DATE_ATOM),
                   'ends_at' => $endsAt->format(DATE_ATOM),
