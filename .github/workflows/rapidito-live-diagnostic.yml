@@ -73,6 +73,16 @@ jobs:
             echo '---ACTIVE BOT 24H ACTIVITY---'
             docker logs --since 24h --tail 10000 "$owner" 2>&1 | awk '/POST \/webhook/ {inbound++} /graph.facebook.com/ {outbound++} /ERROR|Traceback|Error enviando/ {errors++} END {printf "inbound=%d outbound=%d errors=%d\n",inbound,outbound,errors}'
           fi
+          echo '---ACTIVE BOT RECENT ACTIVITY---'
+          for window in 60m 10m; do
+            docker logs --since "$window" --tail 5000 "$owner" 2>&1 | awk -v w="$window" '
+              /POST \/webhook/ {inbound++}
+              /graph.facebook.com/ {graph++}
+              /graph.facebook.com.*200 OK/ {sent_ok++}
+              /graph.facebook.com.*(400|401|403|429|500)/ {sent_error++}
+              /ERROR|Traceback|Error enviando/ {error++}
+              END {printf "window=%s inbound=%d graph=%d sent_ok=%d sent_error=%d errors=%d\n",w,inbound,graph,sent_ok,sent_error,error}'
+          done
           echo '---RECENT WEBHOOK AND SEND ACTIVITY COUNTS---'
           docker logs --since 60m --tail 2000 bot_backend 2>&1 | awk '
           /POST \/webhook/ {webhooks++}
