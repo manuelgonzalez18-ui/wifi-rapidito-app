@@ -1,0 +1,94 @@
+name: Rapidito Recover Crashing Primary Bot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rapidito-recover-primary.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure Rapidito VPS SSH
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+          VPS_PORT_RAW: ${{ secrets.BOT_VPS_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_SSH_KEY_B64"
+          VPS_PORT="$(printf '%s' "$VPS_PORT_RAW" | tr -d '[:space:]')"
+          if ! [[ "$VPS_PORT" =~ ^[0-9]{1,5}$ ]] || [ "$VPS_PORT" -lt 1 ] || [ "$VPS_PORT" -gt 65535 ]; then VPS_PORT=22; fi
+          mkdir -p ~/.ssh
+          printf '%s' "$VPS_SSH_KEY_B64" | tr -d '\r\n ' | base64 --decode > ~/.ssh/rapidito_vps
+          chmod 600 ~/.ssh/rapidito_vps
+          ssh-keygen -y -f ~/.ssh/rapidito_vps >/dev/null
+          ssh-keyscan -T 10 -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "RAPIDITO_HOST=$VPS_HOST" >> "$GITHUB_ENV"
+          echo "RAPIDITO_PORT=$VPS_PORT" >> "$GITHUB_ENV"
+
+      - name: Recover crashing primary from working local fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/rapidito_vps -p "$RAPIDITO_PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$RAPIDITO_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          primary="bot_backend"
+          fallback="bot_backend_pre_promise_message_20260906-223546"
+          backups="/root/rapidito-recovery-20261026"
+          echo "RECOVERY_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          port_owner="$(docker ps --filter publish=5000 --format '{{.Names}}' | head -n 1)"
+          if [ "$port_owner" != "$fallback" ]; then
+            echo "REFUSING: Live port 5000 owner differs from expected fallback."
+            exit 2
+          fi
+          docker exec "$fallback" python -c 'import bot_logic; assert callable(getattr(bot_logic,"handle_payment_flow",None)); import urllib.request; r=urllib.request.urlopen("http://127.0.0.1:5000/webhook",timeout=5); assert r.status==200; print("FALLBACK_HEALTHY=1")'
+          docker inspect "$primary" >/dev/null
+          mkdir -p "$backups"
+          docker cp "$primary:/app/bot_logic.py" "$backups/primary_bot_logic_before_restore.py"
+          docker cp "$primary:/app/bot_entry.py" "$backups/primary_bot_entry.py"
+          docker cp "$fallback:/app/bot_logic.py" "$backups/working_bot_logic.py"
+          python3 -m py_compile "$backups/working_bot_logic.py"
+          python3 - "$backups" <<'PY'
+          import os,sys,ast
+          d=sys.argv[1]
+          expected=ast.parse(open(os.path.join(d,'primary_bot_entry.py')).read())
+          candidate=ast.parse(open(os.path.join(d,'working_bot_logic.py')).read())
+          needed={n.attr for n in ast.walk(expected) if isinstance(n,ast.Attribute) and isinstance(n.value,ast.Name) and n.value.id=='bot_logic'}
+          available={n.name for n in candidate.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef))}
+          available.update(t.id for n in candidate.body if isinstance(n,(ast.Assign,ast.AnnAssign)) for t in (n.targets if isinstance(n,ast.Assign) else [n.target]) if isinstance(t,ast.Name))
+          missing=needed-available
+          print("INTERFACE_REQUIRED=",sorted(needed),"MISSING=",sorted(missing))
+          if missing: sys.exit(3)
+          PY
+          echo "VALIDATED_FALLBACK_CODE=1"
+          docker cp "$backups/working_bot_logic.py" "$primary:/app/bot_logic.py"
+          docker restart "$primary" >/dev/null
+          healthy=0
+          for attempt in $(seq 1 16); do
+            if docker inspect -f '{{.State.Running}}' "$primary" 2>/dev/null | grep -qx true \
+               && docker exec "$primary" python -c 'import bot_presentation,bot_logic,urllib.request; assert callable(bot_logic.handle_payment_flow); r=urllib.request.urlopen("http://127.0.0.1:5000/webhook",timeout=4); assert r.status==200' >/dev/null 2>&1; then
+              healthy=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$healthy" -ne 1 ]; then
+            echo "RECOVERY_FAILED: restoring primary original module"
+            docker cp "$backups/primary_bot_logic_before_restore.py" "$primary:/app/bot_logic.py"
+            docker restart "$primary" >/dev/null || true
+            exit 4
+          fi
+          echo "PRIMARY_RESTORED=1"
+          docker inspect -f 'primary={{.Name}} status={{.State.Status}} restarts={{.RestartCount}}' "$primary"
+          echo "LIVE_FALLBACK_STILL_ACTIVE=$(docker inspect -f '{{.State.Running}}' "$fallback")"
+          echo "EXTERNAL_PORT_OWNER=$(docker ps --filter publish=5000 --format '{{.Names}}' | head -n 1)"
+          echo "RECOVERY_END=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          REMOTE
