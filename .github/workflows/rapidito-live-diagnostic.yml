@@ -57,6 +57,10 @@ jobs:
           docker exec bot_backend python -c 'import os; keys=("WHATSAPP_PROVIDER","META_ACCESS_TOKEN","META_PHONE_NUMBER_ID","META_APP_SECRET","META_VERIFY_TOKEN","EVO_API_URL"); print("provider=",os.getenv("WHATSAPP_PROVIDER","unset")); [print(k+"_present=",bool(os.getenv(k))) for k in keys if k!="WHATSAPP_PROVIDER"]' 2>&1 | head -c 900; echo
           echo '---META GRAPH API AUTH TEST, NO MESSAGES SENT---'
           docker exec bot_backend python -c 'import os, urllib.request, urllib.error; phone=os.getenv("META_PHONE_NUMBER_ID",""); token=os.getenv("META_ACCESS_TOKEN",""); version=os.getenv("META_GRAPH_VERSION","v23.0"); print("can_test_meta=",bool(phone and token)); req=urllib.request.Request("https://graph.facebook.com/"+version+"/"+phone+"?fields=id,display_phone_number",headers={"Authorization":"Bearer "+token}); print("meta_result=",urllib.request.urlopen(req,timeout=10).status if phone and token else "missing_credentials")' 2>&1 | tail -n 8 | sed -E 's/(Bearer |access_token=)[^ ]+/\1[REDACTED]/g' | head -c 900; echo
+          echo '---LATEST PYTHON CRASH REASONS---'
+          docker logs --tail 150 bot_backend 2>&1 | grep -E 'ModuleNotFoundError|ImportError|SyntaxError|IndentationError|AttributeError|TypeError|RuntimeError|Exception|Error|Traceback|File "/app/' | tail -n 20 || true
+          echo '---ACTIVE PORT OWNER---'
+          docker ps --filter publish=5000 --format 'name={{.Names}} status={{.Status}}'
           echo '---RECENT WEBHOOK AND SEND ACTIVITY COUNTS---'
           docker logs --since 60m --tail 2000 bot_backend 2>&1 | awk '
           /POST \/webhook/ {webhooks++}
