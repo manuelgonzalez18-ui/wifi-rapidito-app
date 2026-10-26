@@ -91,5 +91,10 @@ jobs:
           /401|403|400 Bad Request|500 Internal Server Error/ {errors++}
           /ERROR|Traceback|Exception|Error enviando/ {critical++}
           END {printf "webhook_requests=%d graph_requests=%d http_200_lines=%d error_lines=%d critical_lines=%d\n", webhooks, graph, ok, errors, critical}'
+          echo '---FINAL PRIMARY LONGER HEALTH CHECK---'
+          docker inspect -f 'primary_status={{.State.Status}} restart_count={{.RestartCount}} started={{.State.StartedAt}}' bot_backend
+          docker exec bot_backend python -c 'import bot_logic,bot_presentation,urllib.request,os; assert callable(bot_logic.handle_payment_flow); r=urllib.request.urlopen("http://127.0.0.1:5000/webhook",timeout=5); print("production_functions_ok=1 internal_webhook_status=",r.status,"meta_provider=",os.getenv("WHATSAPP_PROVIDER","unset"),"meta_credentials_present=",bool(os.getenv("META_ACCESS_TOKEN") and os.getenv("META_PHONE_NUMBER_ID")))' 2>&1 | tail -n 5
+          echo '---FINAL PUBLIC ROUTE CHECK---'
+          curl -sS -m 8 -w ' public_http_code=%{http_code}\n' http://127.0.0.1:5000/webhook | head -c 500; echo
           echo '---DONE---'
           REMOTE
