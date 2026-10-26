@@ -61,6 +61,18 @@ jobs:
           docker logs --tail 150 bot_backend 2>&1 | grep -E 'ModuleNotFoundError|ImportError|SyntaxError|IndentationError|AttributeError|TypeError|RuntimeError|Exception|Error|Traceback|File "/app/' | tail -n 20 || true
           echo '---ACTIVE PORT OWNER---'
           docker ps --filter publish=5000 --format 'name={{.Names}} status={{.Status}}'
+          echo '---PRIMARY AND ACTIVE IMAGES---'
+          docker inspect -f 'name={{.Name}} image={{.Config.Image}} cmd={{json .Config.Cmd}}' bot_backend 2>&1
+          owner="$(docker ps --filter publish=5000 --format '{{.Names}}' | head -n 1)"
+          if [ -n "$owner" ]; then
+            docker inspect -f 'name={{.Name}} image={{.Config.Image}} cmd={{json .Config.Cmd}}' "$owner" 2>&1
+            echo '---ACTIVE BOT PYTHON FUNCTIONS---'
+            docker exec "$owner" python -c 'import bot_logic; print("has_handle_payment_flow=",hasattr(bot_logic,"handle_payment_flow")); print("function_names=",",".join(n for n in dir(bot_logic) if "payment" in n or "webhook" in n or "message" in n))' 2>&1 | tail -n 7
+            echo '---ACTIVE BOT HEALTH---'
+            docker exec "$owner" python -c 'import urllib.request;r=urllib.request.urlopen("http://127.0.0.1:5000/webhook",timeout=5);print(r.status,r.read(200).decode())' 2>&1 | tail -n 7
+            echo '---ACTIVE BOT 24H ACTIVITY---'
+            docker logs --since 24h --tail 10000 "$owner" 2>&1 | awk '/POST \/webhook/ {inbound++} /graph.facebook.com/ {outbound++} /ERROR|Traceback|Error enviando/ {errors++} END {printf "inbound=%d outbound=%d errors=%d\n",inbound,outbound,errors}'
+          fi
           echo '---RECENT WEBHOOK AND SEND ACTIVITY COUNTS---'
           docker logs --since 60m --tail 2000 bot_backend 2>&1 | awk '
           /POST \/webhook/ {webhooks++}
