@@ -1,0 +1,69 @@
+name: Rapidito Live Diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rapidito-live-diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure SSH for the existing Rapidito VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+          VPS_PORT_RAW: ${{ secrets.BOT_VPS_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_SSH_KEY_B64"
+          VPS_PORT="$(printf '%s' "$VPS_PORT_RAW" | tr -d '[:space:]')"
+          if ! [[ "$VPS_PORT" =~ ^[0-9]{1,5}$ ]] || [ "$VPS_PORT" -lt 1 ] || [ "$VPS_PORT" -gt 65535 ]; then VPS_PORT=22; fi
+          mkdir -p ~/.ssh
+          printf '%s' "$VPS_SSH_KEY_B64" | tr -d '\r\n ' | base64 --decode > ~/.ssh/rapidito_vps
+          chmod 600 ~/.ssh/rapidito_vps
+          ssh-keygen -y -f ~/.ssh/rapidito_vps >/dev/null
+          ssh-keyscan -T 10 -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "RAPIDITO_HOST=$VPS_HOST" >> "$GITHUB_ENV"
+          echo "RAPIDITO_PORT=$VPS_PORT" >> "$GITHUB_ENV"
+
+      - name: Inspect server and WhatsApp health without modifying anything
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/rapidito_vps -p "$RAPIDITO_PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$RAPIDITO_HOST" 'bash -s' <<'REMOTE'
+          set -u
+          echo "CHECK_TIME_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "DOCKER_SERVICE=$(systemctl is-active docker 2>/dev/null || true)"
+          echo '---CONTAINERS---'
+          docker ps -a --format 'name={{.Names}} status={{.Status}} ports={{.Ports}}' 2>&1 | grep -E '^(name=(bot_backend|evolution_api|redis_bot|bot_backend_pre_|rapidito)|Cannot connect|permission)' | head -n 28 || true
+          echo '---PRIMARY INSPECT---'
+          for c in bot_backend evolution_api; do
+            docker inspect -f 'name={{.Name}} state={{.State.Status}} restarts={{.RestartCount}} started={{.State.StartedAt}} port5000={{(index .NetworkSettings.Ports "5000/tcp")}}' "$c" 2>/dev/null || echo "missing_or_unavailable=$c"
+          done
+          echo '---PUBLIC HOST PORT 5000---'
+          curl -sS -m 8 -w '\nhttp_code=%{http_code}\n' http://127.0.0.1:5000/webhook 2>&1 | head -c 700; echo
+          echo '---PRIMARY CONTAINER HEALTH---'
+          docker exec bot_backend python -c 'import urllib.request; r=urllib.request.urlopen("http://127.0.0.1:5000/webhook", timeout=5); print("inside_bot_status=",r.status,"inside_bot_body=",r.read(320).decode(errors="replace"))' 2>&1 | head -c 900; echo
+          echo '---PRIMARY PROVIDER CONFIG PRESENCE (NOT VALUES)---'
+          docker exec bot_backend python -c 'import os; keys=("WHATSAPP_PROVIDER","META_ACCESS_TOKEN","META_PHONE_NUMBER_ID","META_APP_SECRET","META_VERIFY_TOKEN","EVO_API_URL"); print("provider=",os.getenv("WHATSAPP_PROVIDER","unset")); [print(k+"_present=",bool(os.getenv(k))) for k in keys if k!="WHATSAPP_PROVIDER"]' 2>&1 | head -c 900; echo
+          echo '---META GRAPH API AUTH TEST, NO MESSAGES SENT---'
+          docker exec bot_backend python -c 'import os, urllib.request, urllib.error; phone=os.getenv("META_PHONE_NUMBER_ID",""); token=os.getenv("META_ACCESS_TOKEN",""); version=os.getenv("META_GRAPH_VERSION","v23.0"); print("can_test_meta=",bool(phone and token)); req=urllib.request.Request("https://graph.facebook.com/"+version+"/"+phone+"?fields=id,display_phone_number",headers={"Authorization":"Bearer "+token}); print("meta_result=",urllib.request.urlopen(req,timeout=10).status if phone and token else "missing_credentials")' 2>&1 | tail -n 8 | sed -E 's/(Bearer |access_token=)[^ ]+/\1[REDACTED]/g' | head -c 900; echo
+          echo '---RECENT WEBHOOK AND SEND ACTIVITY COUNTS---'
+          docker logs --since 60m --tail 2000 bot_backend 2>&1 | awk '
+          /POST \/webhook/ {webhooks++}
+          /graph.facebook.com/ {graph++}
+          /HTTP\/1.1 200 OK/ {ok++}
+          /401|403|400 Bad Request|500 Internal Server Error/ {errors++}
+          /ERROR|Traceback|Exception|Error enviando/ {critical++}
+          END {printf "webhook_requests=%d graph_requests=%d http_200_lines=%d error_lines=%d critical_lines=%d\n", webhooks, graph, ok, errors, critical}'
+          echo '---DONE---'
+          REMOTE
