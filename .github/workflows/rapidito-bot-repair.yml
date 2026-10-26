@@ -1,12 +1,9 @@
 name: Rapidito Bot Repair
 
+# Manual-only while the tracked bot_logic.py lacks the production payment-flow API.
+# Running this workflow with incompatible code previously crashed bot_backend.
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/rapidito-bot-repair.yml'
-      - 'vps/bot_logic.py'
-      - 'vps/kommo_service.py'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,6 +15,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Block deploys that would break payment flows
+        shell: bash
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          source = ast.parse(Path('vps/bot_logic.py').read_text())
+          defined = {n.name for n in source.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+          if 'handle_payment_flow' not in defined:
+              raise SystemExit('DEPLOYMENT BLOCKED: bot_logic.py lacks handle_payment_flow required by production bot_entry.py')
+          print('Payment flow compatibility function present.')
+          PY
 
       - name: Configure VPS SSH
         env:
