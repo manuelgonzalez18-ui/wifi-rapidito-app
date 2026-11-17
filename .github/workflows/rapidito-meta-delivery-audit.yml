@@ -207,5 +207,17 @@ jobs:
               except Exception as e:
                   print("PAYMENT_QUERY_FAILED=",suffix,type(e).__name__)
           ' 2>&1 | tail -n 28
+          echo '---CONFIRM PAID WHATSAPP ACCOUNT IS ACTIVE ACCOUNT---'
+          docker exec "$target" python -c '
+          import os
+          w=os.getenv("META_WABA_ID","")
+          expected="1681155942913798"
+          print("ACCOUNT_ID_CONFIGURED=",bool(w))
+          print("ACTIVE_WABA_MATCHES_PAID_RAPIDITO_ACCOUNT=",w==expected)
+          '
+          echo '---LATEST META DELIVERY STATES---'
+          docker logs --timestamps --since 60m --tail 10000 "$target" 2>&1 | grep -E "RAPIDITO_META_(SEND_ACCEPTED|STATUS|INBOUND)" | tail -n 16 || true
+          echo '---PUBLIC ROUTE AFTER PAYMENT---'
+          curl -sS -m 8 -o /tmp/rapidito-billing-health -w 'http=%{http_code}\n' https://webhook.wifirapidito.com/webhook || true
           echo '---DONE---'
           REMOTE
