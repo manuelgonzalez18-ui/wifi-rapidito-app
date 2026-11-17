@@ -182,5 +182,9 @@ jobs:
           curl -sS -m 12 -o /dev/null -w 'invalid_token_http=%{http_code}\n' 'https://webhook.wifirapidito.com/webhook?hub.mode=subscribe&hub.verify_token=invalid&hub.challenge=test' || true
           echo '---VHOST PROXY CONFIGURATION---'
           grep -nEi 'rewrite|proxy|webhook|vhDomain|extprocessor|address|context|location|docRoot|vhRoot' /usr/local/lsws/conf/vhosts/webhook.wifirapidito.com/vhost.conf | head -n 60 || true
+          echo '---WEBHOOK VHOST REWRITE BLOCK---'
+          sed -n '1,92p' /usr/local/lsws/conf/vhosts/webhook.wifirapidito.com/vhost.conf | sed -E 's@(keyFile|certFile)([[:space:]]+).*@\1 [certificate path hidden]@' | head -n 92
+          echo '---LITESPEED OPERATING MODE---'
+          ls -l /usr/local/lsws/bin/lswsctrl /usr/local/lsws/bin/openlitespeed 2>/dev/null || true
           echo '---DONE---'
           REMOTE
