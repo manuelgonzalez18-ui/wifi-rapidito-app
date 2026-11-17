@@ -161,5 +161,16 @@ jobs:
           docker logs --timestamps --since 48h --tail 25000 "$listener" 2>&1 | grep 'graph.facebook.com/' | tail -n 10 | cut -c 1-31 || true
           echo '---WHO LISTENS ON 443?---'
           docker ps --filter publish=443 --format 'https_container={{.Names}} image={{.Image}}' | head -n 8
+          echo '---LOCAL HTTPS SITE CONFIGURATION FILE NAMES---'
+          if [ -d /usr/local/lsws/conf ]; then
+            grep -RilE 'webhook|127.0.0.1:5000|localhost:5000' /usr/local/lsws/conf --include='*.conf' 2>/dev/null | head -n 20 || true
+          fi
+          echo '---POTENTIAL PUBLIC BOT DOMAINS---'
+          for host in bot.wifirapidito.com api.wifirapidito.com whatsapp.wifirapidito.com; do
+            ip="$(getent ahostsv4 "$host" | head -n 1 | awk '{print $1}')"
+            if [ -n "$ip" ]; then echo "$host DNS_RESOLVES=1"; else echo "$host DNS_RESOLVES=0"; fi
+          done
+          echo '---WEBHOOK REQUEST SOURCE GROUPS---'
+          docker logs --since 24h --tail 20000 "$listener" 2>&1 | grep 'POST /webhook' | awk '{print $2}' | cut -d: -f1 | sort | uniq -c | sort -rn | head -n 8
           echo '---DONE---'
           REMOTE
