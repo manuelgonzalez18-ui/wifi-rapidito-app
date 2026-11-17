@@ -131,5 +131,11 @@ jobs:
           docker exec bot_backend python -c 'import socket; print("graph_dns=", socket.getaddrinfo("graph.facebook.com",443,type=socket.SOCK_STREAM)[0][4][0])' 2>&1 | tail -n 3 || true
           echo '---DOCKER NETWORK SETTINGS---'
           docker inspect -f 'name={{.Name}} mode={{.HostConfig.NetworkMode}}' "$listener" bot_backend
+          echo '---ACTIVE META API TOKEN STATUS (READ ONLY)---'
+          docker exec "$listener" python -c 'import os,httpx; t=os.getenv("META_ACCESS_TOKEN",""); p=os.getenv("META_PHONE_NUMBER_ID",""); v=os.getenv("META_GRAPH_VERSION","v23.0"); print("has_meta_credentials=",bool(t and p)); r=httpx.get("https://graph.facebook.com/"+v+"/"+p,params={"fields":"id"},headers={"Authorization":"Bearer "+t},timeout=10) if t and p else None; print("meta_http_status=",r.status_code if r is not None else "not_tested"); print("meta_error_code=",r.json().get("error",{}).get("code") if r is not None and r.status_code>=400 else "none")' 2>&1 | tail -n 5
+          echo '---ACTIVE RECENT SEND STATUS---'
+          docker logs --since 12h --tail 5000 "$listener" 2>&1 | grep -E 'HTTP Request: POST https://graph.facebook.com/.*messages' | tail -n 8 | sed -E 's/[0-9]{10,15}/[ID]/g' || true
+          echo '---PUBLIC DOMAIN WEBHOOK HEADERS---'
+          curl -sS -m 12 -o /dev/null -w 'public_domain_http=%{http_code} remote_ip=%{remote_ip}\n' https://wifirapidito.com/webhook 2>&1 | head -n 3
           echo '---DONE---'
           REMOTE
