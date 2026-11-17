@@ -116,5 +116,20 @@ jobs:
             echo '---ACTIVE BOT LAST ERRORS (NO MESSAGE BODIES)---'
             docker logs --since 4h --tail 2500 "$listener" 2>&1 | grep -E '(Error enviando WhatsApp|Meta WhatsApp no está configurado|HTTP Request: POST https://graph.facebook.com/.*(400|401|403|429)|Traceback)' | tail -n 12 | sed -E 's/[0-9]{9,15}/[ID]/g' || true
           fi
+          echo '---DNS AND INTERNET PATH CHECK---'
+          echo 'host_resolver:'
+          grep -E '^nameserver|^search' /etc/resolv.conf || true
+          echo 'host_graph_dns:'
+          timeout 8 getent ahostsv4 graph.facebook.com | head -n 3 || true
+          echo 'host_graph_https:'
+          curl -sS -m 10 -o /dev/null -w 'http=%{http_code} remote=%{remote_ip}\n' https://graph.facebook.com/ 2>&1 | head -n 3 || true
+          echo '---ACTIVE LISTENER DNS---'
+          docker exec "$listener" sh -c "grep '^nameserver' /etc/resolv.conf" 2>&1 || true
+          docker exec "$listener" python -c 'import socket; print("graph_dns=", socket.getaddrinfo("graph.facebook.com",443,type=socket.SOCK_STREAM)[0][4][0])' 2>&1 | tail -n 3 || true
+          echo '---PRIMARY DNS---'
+          docker exec bot_backend sh -c "grep '^nameserver' /etc/resolv.conf" 2>&1 || true
+          docker exec bot_backend python -c 'import socket; print("graph_dns=", socket.getaddrinfo("graph.facebook.com",443,type=socket.SOCK_STREAM)[0][4][0])' 2>&1 | tail -n 3 || true
+          echo '---DOCKER NETWORK SETTINGS---'
+          docker inspect -f 'name={{.Name}} mode={{.HostConfig.NetworkMode}}' "$listener" bot_backend
           echo '---DONE---'
           REMOTE
