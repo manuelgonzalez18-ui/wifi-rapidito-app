@@ -159,5 +159,9 @@ jobs:
                   else: print("SUBSCRIPTION_ERROR_CODE=",d.get("error",{}).get("code"))
               except Exception as e: print("SUBSCRIPTION_QUERY_ERROR=",type(e).__name__)
           ' 2>&1 | tail -n 20
+          echo '---ANONYMIZED DELIVERY TELEMETRY AFTER INSTRUMENTATION---'
+          docker logs --timestamps --since 20m --tail 12000 "$target" 2>&1 | grep -E 'RAPIDITO_META_(SEND_ACCEPTED|STATUS|INBOUND)' | tail -n 35 || true
+          echo '---LIVE PUBLIC WEBHOOK HEALTH---'
+          curl -fsS -m 10 https://webhook.wifirapidito.com/webhook | python3 -c 'import json,sys; d=json.load(sys.stdin); print("public_status=",d.get("status"),"provider=",d.get("provider"))' || true
           echo '---DONE---'
           REMOTE
