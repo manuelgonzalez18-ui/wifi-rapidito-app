@@ -127,5 +127,37 @@ jobs:
           import os
           print("META_RELATED_KEY_NAMES=",",".join(sorted(k for k in os.environ if any(t in k for t in ("META_","WABA","WEBHOOK","FACEBOOK_")))))
           ' 2>&1 | tail -n 3
+          echo '---ACTIVE BOT MESSAGE ROUTING SOURCE (NO SECRETS)---'
+          docker exec "$target" python -c '
+          from pathlib import Path
+          p=Path("/app/bot_logic.py"); s=p.read_text().splitlines()
+          for start,end in ((106,112),(482,511),(914,978),(981,991),(995,1039)):
+              print("SNIPPET=",start,"-",end)
+              for i in range(start,end+1):
+                  x=s[i-1]
+                  print(str(i)+": "+x)
+          ' 2>&1 | tail -n 225
+          echo '---META WABA SUBSCRIPTIONS---'
+          docker exec "$target" python -c '
+          import os,httpx
+          from urllib.parse import urlsplit
+          t=os.getenv("META_ACCESS_TOKEN","")
+          w=os.getenv("META_WABA_ID","")
+          v=os.getenv("META_GRAPH_VERSION","v25.0")
+          print("HAS_WABA_ID=",bool(w))
+          if w and t:
+              try:
+                  r=httpx.get("https://graph.facebook.com/"+v+"/"+w+"/subscribed_apps",headers={"Authorization":"Bearer "+t},timeout=12)
+                  print("SUBSCRIBED_APPS_HTTP=",r.status_code)
+                  d=r.json()
+                  if r.status_code==200:
+                      apps=d.get("data",[])
+                      print("SUBSCRIBED_APPS_COUNT=",len(apps))
+                      for a in apps[:8]:
+                          u=urlsplit(a.get("override_callback_uri") or "")
+                          print("APP_NAME=",str(a.get("name",""))[:40],"OVERRIDE_HOST=",u.hostname or "none","OVERRIDE_PATH=",u.path or "none")
+                  else: print("SUBSCRIPTION_ERROR_CODE=",d.get("error",{}).get("code"))
+              except Exception as e: print("SUBSCRIPTION_QUERY_ERROR=",type(e).__name__)
+          ' 2>&1 | tail -n 20
           echo '---DONE---'
           REMOTE
