@@ -1,0 +1,37 @@
+name: Rapidito Public WhatsApp Webhook Health
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rapidito-public-webhook-health.yml'
+  schedule:
+    - cron: '13 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-public-webhook:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify production HTTPS endpoint from outside VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://webhook.wifirapidito.com/webhook'
+          status="$(curl -fsS --max-time 14 --retry 2 --retry-delay 2 -o /tmp/rapidito-health.json -w '%{http_code}' "$url")"
+          echo "PUBLIC_HEALTH_STATUS=$status"
+          python3 - <<'PY'
+          import json
+          p=json.load(open('/tmp/rapidito-health.json'))
+          assert p.get('status')=='ok' and p.get('provider')=='meta'
+          assert p.get('message')=='Webhook receiver is active'
+          print('PUBLIC_FASTAPI_BACKEND_VERIFIED=1')
+          PY
+          invalid="$(curl -sS --max-time 12 -o /tmp/rapidito-invalid-body -w '%{http_code}' "$url?hub.mode=subscribe&hub.verify_token=invalid-monitor-probe&hub.challenge=test")"
+          echo "INVALID_VERIFY_STATUS=$invalid"
+          if [ "$invalid" != 403 ]; then exit 31; fi
+          echo 'PUBLIC_WEBHOOK_VERIFIED=1'
