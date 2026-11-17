@@ -34,4 +34,13 @@ jobs:
           invalid="$(curl -sS --max-time 12 -o /tmp/rapidito-invalid-body -w '%{http_code}' "$url?hub.mode=subscribe&hub.verify_token=invalid-monitor-probe&hub.challenge=test")"
           echo "INVALID_VERIFY_STATUS=$invalid"
           if [ "$invalid" != 403 ]; then exit 31; fi
+          echo '---EMPTY WEBHOOK POST SMOKE TEST (NO CUSTOMER MESSAGE)---'
+          post_status="$(curl -sS --max-time 14 -o /tmp/rapidito-empty-post.json -w '%{http_code}' -H 'Content-Type: application/json' -d '{"object":"whatsapp_business_account","entry":[]}' "$url")"
+          echo "PUBLIC_EMPTY_POST_HTTP=$post_status"
+          python3 - <<'PY'
+          import json
+          p=json.load(open('/tmp/rapidito-empty-post.json'))
+          assert (p.get('status')=='accepted' and p.get('messages')==0) or (p.get('error')=='Firma inválida')
+          print('PUBLIC_POST_REACHES_FASTAPI=1')
+          PY
           echo 'PUBLIC_WEBHOOK_VERIFIED=1'
