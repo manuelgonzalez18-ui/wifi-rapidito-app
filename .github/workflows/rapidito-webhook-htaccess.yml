@@ -57,6 +57,7 @@ jobs:
           rollback() {
             if [ "$complete" -ne 1 ]; then
               if [ "$had" -eq 1 ]; then cp -p "$backup" "$htaccess"; else rm -f "$htaccess"; fi
+              /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
               echo 'HTACCESS_ROLLBACK_COMPLETED=1'
             fi
           }
@@ -73,6 +74,9 @@ jobs:
           print('WEBHOOK_REWRITE_RULES_INSTALLED=1')
           PY
           if [ "$had" -eq 0 ]; then chown --reference="$root" "$htaccess"; chmod 644 "$htaccess"; fi
+          echo 'RELOADING_WEBHOOK_CONFIG=1'
+          /usr/local/lsws/bin/lswsctrl restart >/tmp/rapidito-htaccess-reload.log 2>&1
+          sleep 2
           fixed=0
           for attempt in $(seq 1 5); do
             code="$(curl -sS -m 10 -o /tmp/rapidito-webhook-proxy-result -w '%{http_code}' https://webhook.wifirapidito.com/webhook 2>/dev/null || true)"
