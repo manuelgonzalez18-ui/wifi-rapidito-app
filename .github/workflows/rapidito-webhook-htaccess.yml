@@ -1,0 +1,94 @@
+name: Rapidito Restore Webhook Route (Htaccess)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rapidito-webhook-htaccess.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Prepare VPS connection
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+          VPS_PORT_RAW: ${{ secrets.BOT_VPS_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_SSH_KEY_B64"
+          VPS_PORT="$(printf '%s' "$VPS_PORT_RAW" | tr -d '[:space:]')"
+          if ! [[ "$VPS_PORT" =~ ^[0-9]{1,5}$ ]] || [ "$VPS_PORT" -lt 1 ] || [ "$VPS_PORT" -gt 65535 ]; then VPS_PORT=22; fi
+          mkdir -p ~/.ssh
+          printf '%s' "$VPS_SSH_KEY_B64" | tr -d '\r\n ' | base64 --decode > ~/.ssh/rapidito_vps
+          chmod 600 ~/.ssh/rapidito_vps
+          ssh-keygen -y -f ~/.ssh/rapidito_vps >/dev/null
+          ssh-keyscan -T 10 -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "RAPIDITO_HOST=$VPS_HOST" >> "$GITHUB_ENV"
+          echo "RAPIDITO_PORT=$VPS_PORT" >> "$GITHUB_ENV"
+
+      - name: Restore only webhook route with rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/rapidito_vps -p "$RAPIDITO_PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$RAPIDITO_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          root=/home/webhook.wifirapidito.com/public_html
+          htaccess="$root/.htaccess"
+          backups=/root/rapidito-webhook-proxy-backups
+          test -d "$root"
+          test -f /usr/local/lsws/conf/vhosts/webhook.wifirapidito.com/vhost.conf
+          curl -fsS -m 5 http://127.0.0.1:5000/webhook | grep -q 'Webhook receiver is active'
+          mkdir -p "$backups"
+          had=0
+          backup="$backups/htaccess-$(date -u +%Y%m%dT%H%M%SZ)"
+          if [ -f "$htaccess" ]; then
+            cp -p "$htaccess" "$backup"
+            had=1
+          fi
+          complete=0
+          rollback() {
+            if [ "$complete" -ne 1 ]; then
+              if [ "$had" -eq 1 ]; then cp -p "$backup" "$htaccess"; else rm -f "$htaccess"; fi
+              echo 'HTACCESS_ROLLBACK_COMPLETED=1'
+            fi
+          }
+          trap rollback EXIT
+          python3 - "$htaccess" <<'PY'
+          import pathlib,sys
+          p=pathlib.Path(sys.argv[1])
+          original=p.read_text() if p.exists() else ''
+          marker='# Rapidito WhatsApp HTTPS proxy - managed recovery'
+          if marker in original:
+              raise SystemExit('Recovery rule already exists; not duplicating')
+          rules=marker+'\nRewriteEngine On\nRewriteRule ^webhook$ http://127.0.0.1:5000/webhook [P,L]\nRewriteRule ^webhook-whatsapp$ http://127.0.0.1:5000/webhook-whatsapp [P,L]\n\n'
+          p.write_text(rules+original)
+          print('WEBHOOK_REWRITE_RULES_INSTALLED=1')
+          PY
+          if [ "$had" -eq 0 ]; then chown --reference="$root" "$htaccess"; chmod 644 "$htaccess"; fi
+          fixed=0
+          for attempt in $(seq 1 5); do
+            code="$(curl -sS -m 10 -o /tmp/rapidito-webhook-proxy-result -w '%{http_code}' https://webhook.wifirapidito.com/webhook 2>/dev/null || true)"
+            if [ "$code" = '200' ] && grep -q 'Webhook receiver is active' /tmp/rapidito-webhook-proxy-result; then
+              fixed=1
+              break
+            fi
+            sleep 1
+          done
+          echo "PUBLIC_WEBHOOK_HTTP=$code"
+          if [ "$fixed" -ne 1 ]; then exit 21; fi
+          invalid="$(curl -sS -m 8 -o /dev/null -w '%{http_code}' 'https://webhook.wifirapidito.com/webhook?hub.mode=subscribe&hub.verify_token=invalid&hub.challenge=check' || true)"
+          echo "INVALID_VERIFY_HTTP=$invalid"
+          if [ "$invalid" != 403 ]; then exit 22; fi
+          complete=1
+          trap - EXIT
+          echo 'HTTPS_WEBHOOK_ROUTE_RESTORED=1'
+          echo "UPSTREAM_OWNER=$(docker ps --filter publish=5000 --format '{{.Names}}' | head -n 1)"
+          REMOTE
