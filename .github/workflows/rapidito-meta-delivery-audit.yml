@@ -94,5 +94,38 @@ jobs:
             /webhook/ {total++; last=substr($0,1,145)}
             END {print "RECENT_WEBHOOK_ACCESS_COUNT=",total+0; if(last!="") print "LAST_ACCESS_LINE_REDACTED=present"}'
           else echo 'WEBHOOK_ACCESS_LOG_UNAVAILABLE=1'; fi
+          echo '---TIMELINE OF WEBHOOKS AND META SENDS, NO PHONE NUMBERS---'
+          docker logs --timestamps --since 3h --tail 8000 "$target" 2>&1 | awk '
+            /POST \/webhook/ {print substr($0,1,30),"INBOUND_WEBHOOK"}
+            /HTTP Request: POST https:\/\/graph.facebook.com\// {
+              status="UNKNOWN"
+              if ($0 ~ /200 OK/) status="SUCCESS_200"
+              else if ($0 ~ /400|401|403|429|500/) status="HTTP_ERROR"
+              print substr($0,1,30),"OUTBOUND_META",status
+            }' | tail -n 45
+          echo '---LIVE BOT ROUTER FUNCTIONS---'
+          docker exec "$target" python -c '
+          import ast,pathlib
+          for name in ("bot_presentation.py","bot_entry.py","bot_logic.py"):
+              p=pathlib.Path("/app")/name
+              if not p.exists():
+                  print("MISSING=",name)
+                  continue
+              t=ast.parse(p.read_text())
+              print("FILE=",name,"LINES=",len(p.read_text().splitlines()))
+              for node in t.body:
+                  if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)):
+                      print("FUNCTION=",node.name,"START=",node.lineno,"END=",node.end_lineno)
+              imports=[]
+              for n in t.body:
+                  if isinstance(n,ast.ImportFrom):
+                      imports.append(n.module or "")
+              print("IMPORT_MODULES=",",".join(imports[:20]))
+          ' 2>&1 | tail -n 100
+          echo '---LIVE BOT META CONFIG KEY PRESENCE---'
+          docker exec "$target" python -c '
+          import os
+          print("META_RELATED_KEY_NAMES=",",".join(sorted(k for k in os.environ if any(t in k for t in ("META_","WABA","WEBHOOK","FACEBOOK_")))))
+          ' 2>&1 | tail -n 3
           echo '---DONE---'
           REMOTE
