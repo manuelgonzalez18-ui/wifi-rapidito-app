@@ -163,5 +163,15 @@ jobs:
           docker logs --timestamps --since 20m --tail 12000 "$target" 2>&1 | grep -E 'RAPIDITO_META_(SEND_ACCEPTED|STATUS|INBOUND)' | tail -n 35 || true
           echo '---LIVE PUBLIC WEBHOOK HEALTH---'
           curl -fsS -m 10 https://webhook.wifirapidito.com/webhook | python3 -c 'import json,sys; d=json.load(sys.stdin); print("public_status=",d.get("status"),"provider=",d.get("provider"))' || true
+          echo '---7:28 RAPIDITO TEST - DELIVERY TELEMETRY---'
+          docker logs --timestamps --since 35m --tail 25000 "$target" 2>&1 | grep -E 'RAPIDITO_META_(SEND_ACCEPTED|STATUS|INBOUND)' | tail -n 90 || true
+          echo '---7:28 RAPIDITO TEST - WEBHOOK AND SEND TIMES---'
+          docker logs --timestamps --since 35m --tail 25000 "$target" 2>&1 | awk '
+              /POST \/webhook/ {print substr($0,1,30),"WEBHOOK",($0 ~ /200 OK/ ? "200" : "non-200")}
+              /HTTP Request: POST https:\/\/graph.facebook.com\// {print substr($0,1,30),"META_SEND",($0 ~ /200 OK/ ? "200" : "non-200")}
+              /Error enviando WhatsApp|Meta WhatsApp no está|Traceback/ {print substr($0,1,30),"ERROR"}
+          ' | tail -n 100
+          echo '---CURRENT TIME---'
+          date -u '+utc=%Y-%m-%dT%H:%M:%SZ'
           echo '---DONE---'
           REMOTE
