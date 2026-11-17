@@ -96,5 +96,25 @@ jobs:
           docker exec bot_backend python -c 'import bot_logic,bot_presentation,urllib.request,os; assert callable(bot_logic.handle_payment_flow); r=urllib.request.urlopen("http://127.0.0.1:5000/webhook",timeout=5); print("production_functions_ok=1 internal_webhook_status=",r.status,"meta_provider=",os.getenv("WHATSAPP_PROVIDER","unset"),"meta_credentials_present=",bool(os.getenv("META_ACCESS_TOKEN") and os.getenv("META_PHONE_NUMBER_ID")))' 2>&1 | tail -n 5
           echo '---FINAL PUBLIC ROUTE CHECK---'
           curl -sS -m 8 -w ' public_http_code=%{http_code}\n' http://127.0.0.1:5000/webhook | head -c 500; echo
+          echo '---2026-11-17 SERVICE STATUS---'
+          date -u '+server_utc=%Y-%m-%dT%H:%M:%SZ'
+          docker ps --filter publish=5000 --format 'listener={{.Names}} age={{.Status}}'
+          docker inspect -f 'primary={{.State.Status}} restarts={{.RestartCount}}' bot_backend 2>/dev/null || true
+          echo '---CURRENT MESSAGE FLOW 15M / 60M---'
+          listener="$(docker ps --filter publish=5000 --format '{{.Names}}' | head -n 1)"
+          if [ -n "$listener" ]; then
+            for window in 15m 60m; do
+              docker logs --since "$window" --tail 15000 "$listener" 2>&1 | awk -v w="$window" '
+                /POST \/webhook/ {incoming++}
+                /POST \/webhook.*200/ {webhook_ok++}
+                /graph.facebook.com.*messages/ {sending++}
+                /graph.facebook.com.*200 OK/ {send_ok++}
+                /graph.facebook.com.*(400|401|403|429|500)/ {send_fail++}
+                /Error enviando|ERROR|Traceback|Exception/ {errors++}
+                END {printf "window=%s incoming=%d webhook_ok=%d sending=%d send_ok=%d send_fail=%d errors=%d\n",w,incoming,webhook_ok,sending,send_ok,send_fail,errors}'
+            done
+            echo '---ACTIVE BOT LAST ERRORS (NO MESSAGE BODIES)---'
+            docker logs --since 4h --tail 2500 "$listener" 2>&1 | grep -E '(Error enviando WhatsApp|Meta WhatsApp no está configurado|HTTP Request: POST https://graph.facebook.com/.*(400|401|403|429)|Traceback)' | tail -n 12 | sed -E 's/[0-9]{9,15}/[ID]/g' || true
+          fi
           echo '---DONE---'
           REMOTE
