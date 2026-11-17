@@ -186,5 +186,14 @@ jobs:
           sed -n '1,92p' /usr/local/lsws/conf/vhosts/webhook.wifirapidito.com/vhost.conf | sed -E 's@(keyFile|certFile)([[:space:]]+).*@\1 [certificate path hidden]@' | head -n 92
           echo '---LITESPEED OPERATING MODE---'
           ls -l /usr/local/lsws/bin/lswsctrl /usr/local/lsws/bin/openlitespeed 2>/dev/null || true
+          echo '---LITESPEED PROXY FAILURE DIAGNOSTIC---'
+          for log in /usr/local/lsws/logs/error.log /home/webhook.wifirapidito.com/logs/webhook.wifirapidito.com.error_log; do
+            if [ -f "$log" ]; then
+              echo "log_found=$(basename "$log")"
+              tail -n 180 "$log" | grep -Ei 'proxy|5000|webhook|rewrite|failed|error|unavailable|backend' | tail -n 30 | sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/[IP]/g' || true
+            fi
+          done
+          echo '---WEBHOOK DOMAIN AFTER ROLLBACK---'
+          curl -sS -m 8 -o /dev/null -w 'rollback_http=%{http_code}\n' https://webhook.wifirapidito.com/webhook
           echo '---DONE---'
           REMOTE
