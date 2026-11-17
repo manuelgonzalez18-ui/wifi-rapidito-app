@@ -172,5 +172,15 @@ jobs:
           done
           echo '---WEBHOOK REQUEST SOURCE GROUPS---'
           docker logs --since 24h --tail 20000 "$listener" 2>&1 | grep 'POST /webhook' | awk '{print $2}' | cut -d: -f1 | sort | uniq -c | sort -rn | head -n 8
+          echo '---ACTUAL WEBHOOK DOMAIN EXTERNAL HEALTH---'
+          for endpoint in 'https://webhook.wifirapidito.com/webhook' 'https://webhook.wifirapidito.com/'; do
+            curl -sS -m 12 -D /tmp/rapidito_webhook_header.txt -o /tmp/rapidito_webhook_body.txt -w 'http=%{http_code} tls=%{ssl_verify_result} remote=%{remote_ip}\n' "$endpoint" 2>&1 | head -n 3
+            grep -iE '^(HTTP/|content-type:|location:)' /tmp/rapidito_webhook_header.txt | head -n 4 || true
+            head -c 180 /tmp/rapidito_webhook_body.txt 2>/dev/null | tr '\n' ' '; echo
+          done
+          echo '---ACTUAL WEBHOOK VERIFY TOKEN RESPONSE---'
+          curl -sS -m 12 -o /dev/null -w 'invalid_token_http=%{http_code}\n' 'https://webhook.wifirapidito.com/webhook?hub.mode=subscribe&hub.verify_token=invalid&hub.challenge=test' || true
+          echo '---VHOST PROXY CONFIGURATION---'
+          grep -nEi 'rewrite|proxy|webhook|vhDomain|extprocessor|address|context|location|docRoot|vhRoot' /usr/local/lsws/conf/vhosts/webhook.wifirapidito.com/vhost.conf | head -n 60 || true
           echo '---DONE---'
           REMOTE
