@@ -1,0 +1,117 @@
+name: Rapidito Fix HTTPS Webhook Proxy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rapidito-fix-webhook-proxy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Connect to authorized Rapidito VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+          VPS_PORT_RAW: ${{ secrets.BOT_VPS_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_SSH_KEY_B64"
+          VPS_PORT="$(printf '%s' "$VPS_PORT_RAW" | tr -d '[:space:]')"
+          if ! [[ "$VPS_PORT" =~ ^[0-9]{1,5}$ ]] || [ "$VPS_PORT" -lt 1 ] || [ "$VPS_PORT" -gt 65535 ]; then VPS_PORT=22; fi
+          mkdir -p ~/.ssh
+          printf '%s' "$VPS_SSH_KEY_B64" | tr -d '\r\n ' | base64 --decode > ~/.ssh/rapidito_vps
+          chmod 600 ~/.ssh/rapidito_vps
+          ssh-keygen -y -f ~/.ssh/rapidito_vps >/dev/null
+          ssh-keyscan -T 10 -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "RAPIDITO_HOST=$VPS_HOST" >> "$GITHUB_ENV"
+          echo "RAPIDITO_PORT=$VPS_PORT" >> "$GITHUB_ENV"
+
+      - name: Repair only Rapidito webhook vhost, verify, rollback on error
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/rapidito_vps -p "$RAPIDITO_PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$RAPIDITO_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          vh=/usr/local/lsws/conf/vhosts/webhook.wifirapidito.com/vhost.conf
+          server=/usr/local/lsws/bin/openlitespeed
+          control=/usr/local/lsws/bin/lswsctrl
+          backup_dir=/root/rapidito-webhook-proxy-backups
+          test -f "$vh" && test -x "$server" && test -x "$control"
+          curl -fsS -m 5 http://127.0.0.1:5000/webhook | grep -q 'Webhook receiver is active'
+          mkdir -p "$backup_dir"
+          backup="$backup_dir/vhost-$(date -u +%Y%m%dT%H%M%SZ).conf"
+          cp -p "$vh" "$backup"
+          echo "BACKUP_CREATED=1"
+          restore() {
+            cp -p "$backup" "$vh"
+            "$control" restart >/dev/null 2>&1 || true
+            echo "CONFIG_ROLLED_BACK=1"
+          }
+          if ! python3 - "$vh" <<'PY'
+          import pathlib,re,sys
+          p=pathlib.Path(sys.argv[1])
+          original=p.read_text()
+          match=re.search(r'(?ms)^rewrite\s*\{\s*\n(?P<body>.*?)^\}',original)
+          if not match:
+              raise SystemExit('Missing expected vhost rewrite block; refusing change')
+          body=match.group('body')
+          if 'autoLoadHtaccess' not in body or not re.search(r'(?m)^\s*enable\s+1\s*$',body):
+              raise SystemExit('Unexpected vhost rewrite settings; refusing change')
+          if 'RewriteRule' in body or 'rules <<<' in body:
+              raise SystemExit('Unexpected existing rewrite rules; refusing change')
+          rules='  rules <<<END\nRewriteRule ^/?webhook$ http://127.0.0.1:5000/webhook [P,L]\nRewriteRule ^/?webhook-whatsapp$ http://127.0.0.1:5000/webhook-whatsapp [P,L]\nEND\n'
+          pos=match.end()-1
+          updated=original[:pos]+rules+original[pos:]
+          p.write_text(updated)
+          print('PROXY_RULES_WRITTEN=1')
+          PY
+          then
+            restore
+            exit 10
+          fi
+          if ! "$server" -t >/tmp/rapidito-webhook-config-test.log 2>&1; then
+            echo "CONFIG_TEST_FAILED=1"
+            tail -n 10 /tmp/rapidito-webhook-config-test.log
+            restore
+            exit 11
+          fi
+          echo "CONFIG_TEST_PASSED=1"
+          if ! "$control" restart >/tmp/rapidito-webhook-restart.log 2>&1; then
+            echo "GRACEFUL_RESTART_FAILED=1"
+            restore
+            exit 12
+          fi
+          echo "GRACEFUL_RESTART_SENT=1"
+          success=0
+          for attempt in $(seq 1 10); do
+            code="$(curl -sS -m 8 -o /tmp/rapidito-webhook-response.json -w '%{http_code}' https://webhook.wifirapidito.com/webhook 2>/dev/null || true)"
+            if [ "$code" = 200 ] && grep -q 'Webhook receiver is active' /tmp/rapidito-webhook-response.json; then
+              success=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "PUBLIC_WEBHOOK_TEST_FAILED=1 last_http=$code"
+            restore
+            exit 13
+          fi
+          echo "PUBLIC_WEBHOOK_HTTP=200"
+          invalid="$(curl -sS -m 8 -o /dev/null -w '%{http_code}' 'https://webhook.wifirapidito.com/webhook?hub.mode=subscribe&hub.verify_token=invalid&hub.challenge=ok' || true)"
+          echo "INVALID_VERIFY_TOKEN_HTTP=$invalid"
+          if [ "$invalid" != 403 ]; then
+            echo "PUBLIC_VERIFY_TOKEN_TEST_FAILED=1"
+            restore
+            exit 14
+          fi
+          echo "WEBHOOK_HTTPS_PROXY_FIXED=1"
+          echo "ACTIVE_PORT_OWNER=$(docker ps --filter publish=5000 --format '{{.Names}}' | head -n 1)"
+          REMOTE
