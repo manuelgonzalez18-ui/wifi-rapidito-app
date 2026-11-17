@@ -1,0 +1,98 @@
+name: Rapidito Meta Delivery Audit
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/rapidito-meta-delivery-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Configure VPS SSH
+        env:
+          VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+          VPS_PORT_RAW: ${{ secrets.BOT_VPS_PORT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_SSH_KEY_B64"
+          PORT="$(printf '%s' "$VPS_PORT_RAW" | tr -d '[:space:]')"
+          if ! [[ "$PORT" =~ ^[0-9]{1,5}$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then PORT=22; fi
+          mkdir -p ~/.ssh
+          printf '%s' "$VPS_SSH_KEY_B64" | tr -d '\r\n ' | base64 --decode > ~/.ssh/rapidito_vps
+          chmod 600 ~/.ssh/rapidito_vps
+          ssh-keygen -y -f ~/.ssh/rapidito_vps >/dev/null
+          ssh-keyscan -T 10 -p "$PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "SSH_HOST=$VPS_HOST" >> "$GITHUB_ENV"
+          echo "SSH_PORT=$PORT" >> "$GITHUB_ENV"
+      - name: Examine inbound delivery and Meta app subscriptions read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/rapidito_vps -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -u
+          echo "AUDIT_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          target="$(docker ps --filter publish=5000 --format '{{.Names}}' | head -n 1)"
+          echo "ACTIVE_LISTENER=$target"
+          echo '---META APP SUBSCRIPTIONS (NO CREDENTIALS)---'
+          docker exec "$target" python - <<'PY' || true
+          PY
+          docker exec "$target" python -c '
+          import os,httpx
+          from urllib.parse import urlsplit
+          token=os.getenv("META_ACCESS_TOKEN","")
+          phone=os.getenv("META_PHONE_NUMBER_ID","")
+          version=os.getenv("META_GRAPH_VERSION","v25.0")
+          print("META_CREDENTIALS_PRESENT=",bool(token and phone))
+          if not (token and phone): raise SystemExit(0)
+          client=httpx.Client(timeout=12)
+          base="https://graph.facebook.com/"+version+"/"
+          headers={"Authorization":"Bearer "+token}
+          def query(path,params=None):
+              try:
+                  r=client.get(base+path,headers=headers,params=params)
+                  if r.status_code>=400:
+                      err=r.json().get("error",{})
+                      print("GRAPH_QUERY_ERROR=",r.status_code,"code=",err.get("code"),"subcode=",err.get("error_subcode"))
+                      return None
+                  return r.json()
+              except Exception as e:
+                  print("GRAPH_TRANSPORT_ERROR=",type(e).__name__)
+                  return None
+          obj=query(phone,{"fields":"whatsapp_business_account"})
+          waba=((obj or {}).get("whatsapp_business_account") or {}).get("id")
+          print("PHONE_WABA_LOOKUP=",bool(waba))
+          if waba:
+              subscriptions=query(waba+"/subscribed_apps",{"fields":"id,name,override_callback_uri"})
+              apps=(subscriptions or {}).get("data",[])
+              print("WABA_SUBSCRIBED_APP_COUNT=",len(apps))
+              for item in apps[:12]:
+                  uri=item.get("override_callback_uri") or ""
+                  p=urlsplit(uri)
+                  print("WABA_APP_NAME=",str(item.get("name",""))[:70],"OVERRIDE_CALLBACK_HOST=",p.hostname or "none","OVERRIDE_CALLBACK_PATH=",p.path or "none")
+          app_id=os.getenv("META_APP_ID") or os.getenv("FACEBOOK_APP_ID") or ""
+          print("APP_ID_ENV_PRESENT=",bool(app_id))
+          if app_id:
+              app_subs=query(app_id+"/subscriptions")
+              for s in (app_subs or {}).get("data",[]):
+                  if s.get("object")=="whatsapp_business_account":
+                      u=urlsplit(s.get("callback_url",""))
+                      print("APP_CALLBACK_HOST=",u.hostname or "none","APP_CALLBACK_PATH=",u.path or "none","APP_FIELDS=",",".join(s.get("fields",[])[:20]))
+          ' 2>&1 | tail -n 35
+          echo '---RECENT INBOUND FROM DOCKER---'
+          docker logs --timestamps --since 8h --tail 25000 "$target" 2>&1 | awk '
+          /POST \/webhook/ {total++; last=substr($0,1,30)}
+          END {print "EIGHT_HOUR_WEBHOOK_COUNT=",total+0,"LAST_WEBHOOK_UTC=",last}'
+          echo '---RECENT PUBLIC HTTPS ACCESS COUNTS---'
+          f=/home/webhook.wifirapidito.com/logs/webhook.wifirapidito.com.access_log
+          if [ -r "$f" ]; then
+            tail -n 15000 "$f" | awk '
+            /webhook/ {total++; last=substr($0,1,145)}
+            END {print "RECENT_WEBHOOK_ACCESS_COUNT=",total+0; if(last!="") print "LAST_ACCESS_LINE_REDACTED=present"}'
+          else echo 'WEBHOOK_ACCESS_LOG_UNAVAILABLE=1'; fi
+          echo '---DONE---'
+          REMOTE
