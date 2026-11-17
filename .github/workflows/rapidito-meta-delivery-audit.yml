@@ -173,5 +173,39 @@ jobs:
           ' | tail -n 100
           echo '---CURRENT TIME---'
           date -u '+utc=%Y-%m-%dT%H:%M:%SZ'
+          echo '---META WABA BILLING HEALTH READ ONLY---'
+          docker exec "$target" python -c '
+          import os,httpx,json
+          t=os.getenv("META_ACCESS_TOKEN",""); w=os.getenv("META_WABA_ID",""); v=os.getenv("META_GRAPH_VERSION","v25.0")
+          if not (t and w):
+              print("WABA_CREDENTIALS_MISSING=1")
+              raise SystemExit(0)
+          cli=httpx.Client(timeout=15)
+          h={"Authorization":"Bearer "+t}
+          root="https://graph.facebook.com/"+v+"/"+w
+          q=cli.get(root,params={"fields":"status,currency,timezone_id,primary_funding_id,health_status,business_verification_status"},headers=h)
+          print("WABA_FIELDS_HTTP=",q.status_code)
+          j=q.json()
+          if q.status_code==200:
+              print("WABA_STATUS=",j.get("status","not_returned"))
+              print("CURRENCY_PRESENT=",bool(j.get("currency")))
+              print("TIMEZONE_PRESENT=",bool(j.get("timezone_id")))
+              print("PRIMARY_FUNDING_PRESENT=",bool(j.get("primary_funding_id")))
+              print("BUSINESS_VERIFICATION=",j.get("business_verification_status","not_returned"))
+              health=j.get("health_status")
+              print("HEALTH_SUMMARY=",json.dumps(health,ensure_ascii=True)[:1300] if health is not None else "not_returned")
+          else:
+              print("WABA_ERROR_CODE=",j.get("error",{}).get("code"))
+          for suffix in ("/payment_configuration","/payment_configurations"):
+              try:
+                  resp=cli.get(root+suffix,headers=h)
+                  d=resp.json()
+                  print("PAYMENT_QUERY=",suffix,"HTTP=",resp.status_code,"ERROR_CODE=",d.get("error",{}).get("code") if isinstance(d,dict) else "none")
+                  if resp.status_code==200:
+                      print("PAYMENT_CONFIG_PRESENT=",bool(d.get("data") or d.get("id") or d.get("payment_configuration")))
+                      print("PAYMENT_CONFIG_FIELD_NAMES=",",".join(sorted(k for k in d if k not in ("data","id"))))
+              except Exception as e:
+                  print("PAYMENT_QUERY_FAILED=",suffix,type(e).__name__)
+          ' 2>&1 | tail -n 28
           echo '---DONE---'
           REMOTE
