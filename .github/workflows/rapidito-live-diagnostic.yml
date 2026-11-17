@@ -147,5 +147,19 @@ jobs:
           docker logs --since 48h --tail 25000 "$listener" 2>&1 | grep 'POST /webhook' | tail -n 8 | cut -c 1-24 || true
           echo '---LISTENING TCP PORTS---'
           ss -lnt | grep -E '(:80 |:443 |:5000 |:8080 )' | head -n 12 || true
+          echo '---HTTPS 443 PROCESS---'
+          ss -lntp | grep ':443 ' | head -n 8 || true
+          echo '---PROXY SERVICES---'
+          docker ps --format 'name={{.Names}} image={{.Image}} ports={{.Ports}}' | grep -Ei 'nginx|caddy|traefik|proxy|cloudflared|tunnel' | head -n 15 || true
+          echo '---REVERSE PROXY SERVER NAMES---'
+          if command -v nginx >/dev/null 2>&1; then
+            nginx -T 2>/dev/null | grep -E 'server_name|proxy_pass|webhook' | head -n 35 || true
+          fi
+          echo '---LAST WEBHOOK EVENT TIMES---'
+          docker logs --timestamps --since 48h --tail 25000 "$listener" 2>&1 | grep 'POST /webhook' | tail -n 10 | cut -c 1-31 || true
+          echo '---LAST META SEND EVENT TIMES---'
+          docker logs --timestamps --since 48h --tail 25000 "$listener" 2>&1 | grep 'graph.facebook.com/' | tail -n 10 | cut -c 1-31 || true
+          echo '---WHO LISTENS ON 443?---'
+          docker ps --filter publish=443 --format 'https_container={{.Names}} image={{.Image}}' | head -n 8
           echo '---DONE---'
           REMOTE
