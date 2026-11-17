@@ -137,5 +137,15 @@ jobs:
           docker logs --since 12h --tail 5000 "$listener" 2>&1 | grep -E 'HTTP Request: POST https://graph.facebook.com/.*messages' | tail -n 8 | sed -E 's/[0-9]{10,15}/[ID]/g' || true
           echo '---PUBLIC DOMAIN WEBHOOK HEADERS---'
           curl -sS -m 12 -o /dev/null -w 'public_domain_http=%{http_code} remote_ip=%{remote_ip}\n' https://wifirapidito.com/webhook 2>&1 | head -n 3
+          echo '---EXTERNAL WEBHOOK ROUTING---'
+          curl -sS -m 10 -D /tmp/rapidito_headers.txt -o /tmp/rapidito_body.txt https://wifirapidito.com/webhook || true
+          grep -iE '^(HTTP/|content-type:|location:|server:)' /tmp/rapidito_headers.txt | head -n 8 || true
+          head -c 130 /tmp/rapidito_body.txt 2>/dev/null | tr '\n' ' '; echo
+          echo '---WEBHOOK VALIDATION RESPONSE CLASS---'
+          curl -sS -m 10 -o /dev/null -w 'invalid_verify_http=%{http_code}\n' 'https://wifirapidito.com/webhook?hub.mode=subscribe&hub.verify_token=invalid&hub.challenge=check' || true
+          echo '---LAST INBOUND TIMESTAMPS---'
+          docker logs --since 48h --tail 25000 "$listener" 2>&1 | grep 'POST /webhook' | tail -n 8 | cut -c 1-24 || true
+          echo '---LISTENING TCP PORTS---'
+          ss -lnt | grep -E '(:80 |:443 |:5000 |:8080 )' | head -n 12 || true
           echo '---DONE---'
           REMOTE
