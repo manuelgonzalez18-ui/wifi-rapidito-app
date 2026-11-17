@@ -1,0 +1,115 @@
+name: Rapidito Meta Delivery Observability
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/rapidito-meta-delivery-observability.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  instrument:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Connect to VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.BOT_VPS_HOST }}
+          VPS_SSH_KEY_B64: ${{ secrets.BOT_VPS_SSH_KEY_B64 }}
+          VPS_PORT_RAW: ${{ secrets.BOT_VPS_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_SSH_KEY_B64"
+          PORT="$(printf '%s' "$VPS_PORT_RAW" | tr -d '[:space:]')"
+          if ! [[ "$PORT" =~ ^[0-9]{1,5}$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then PORT=22; fi
+          mkdir -p ~/.ssh
+          printf '%s' "$VPS_SSH_KEY_B64" | tr -d '\r\n ' | base64 --decode > ~/.ssh/rapidito_vps
+          chmod 600 ~/.ssh/rapidito_vps
+          ssh-keygen -y -f ~/.ssh/rapidito_vps >/dev/null
+          ssh-keyscan -T 10 -p "$PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "SSH_HOST=$VPS_HOST" >> "$GITHUB_ENV"
+          echo "SSH_PORT=$PORT" >> "$GITHUB_ENV"
+      - name: Add privacy-preserving inbound and delivery status logs with rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/rapidito_vps -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          active="$(docker ps --filter publish=5000 --format '{{.Names}}' | head -n 1)"
+          if [ "$active" != 'bot_backend_pre_promise_message_20260906-223546' ]; then
+            echo 'UNEXPECTED_LISTENER_ABORT=1'
+            exit 11
+          fi
+          curl -fsS -m 5 http://127.0.0.1:5000/webhook | grep -q 'Webhook receiver is active'
+          backupdir=/root/rapidito-whatsapp-diagnostics-20261117
+          mkdir -p "$backupdir"
+          sourcefile="$backupdir/production-bot-logic-original.py"
+          modified="$backupdir/production-bot-logic-observed.py"
+          docker cp "$active:/app/bot_logic.py" "$sourcefile"
+          python3 - "$sourcefile" "$modified" <<'PY'
+          from pathlib import Path
+          import sys,ast
+          source=Path(sys.argv[1]).read_text()
+          if "RAPIDITO_META_SEND_ACCEPTED" in source or "RAPIDITO_META_STATUS" in source:
+              raise SystemExit("Instrumentation already present; no duplicate deployment")
+          anchor='            return True\n        except Exception as exc:'
+          replacement='''            if WHATSAPP_PROVIDER == "meta":
+                try:
+                    result = response.json()
+                    actual = ((result.get("contacts") or [{}])[0].get("wa_id") or "")
+                    statuses = ((result.get("messages") or [{}])[0].get("message_status") or "unreported")
+                    logger.info("RAPIDITO_META_SEND_ACCEPTED state=%s recipient_match=%s", str(statuses)[:50], bool(actual and normalize_phone(actual) == phone))
+                except (ValueError, KeyError, IndexError, AttributeError):
+                    logger.warning("RAPIDITO_META_SEND_RESULT_UNREADABLE")
+            return True
+        except Exception as exc:'''
+          if source.count(anchor) != 1: raise SystemExit("Expected send code not found, refusing modification")
+          source=source.replace(anchor,replacement,1)
+          hook='''                for message in value.get("messages") or []:'''
+          replacement_hook='''                for delivery in value.get("statuses") or []:
+                    errors = delivery.get("errors") or []
+                    code = errors[0].get("code") if errors and isinstance(errors[0],dict) else "none"
+                    logger.info("RAPIDITO_META_STATUS state=%s error_code=%s", str(delivery.get("status","unknown"))[:40], str(code)[:30])
+                for message in value.get("messages") or []:
+                    logger.info("RAPIDITO_META_INBOUND type=%s", str(message.get("type","unknown"))[:40])'''
+          if source.count(hook) != 1: raise SystemExit("Expected inbound hook code not found, refusing modification")
+          source=source.replace(hook,replacement_hook,1)
+          ast.parse(source)
+          Path(sys.argv[2]).write_text(source)
+          print("PRIVACY_SAFE_LOGGING_VALIDATED=1")
+          PY
+          python3 -m py_compile "$modified"
+          restore=1
+          rollback() {
+            if [ "$restore" -eq 1 ]; then
+              docker cp "$sourcefile" "$active:/app/bot_logic.py" || true
+              docker restart "$active" >/dev/null || true
+              echo 'RESTORED_ORIGINAL_BOT=1'
+            fi
+          }
+          trap rollback EXIT
+          docker cp "$modified" "$active:/app/bot_logic.py"
+          docker restart "$active" >/dev/null
+          check=0
+          for i in $(seq 1 12); do
+            if docker exec "$active" python -c 'import bot_logic,bot_presentation,urllib.request; r=urllib.request.urlopen("http://127.0.0.1:5000/webhook",timeout=4); assert r.status==200; assert bot_logic.WHATSAPP_PROVIDER=="meta"' >/dev/null 2>&1; then
+              check=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$check" -ne 1 ]; then
+            echo 'INSTRUMENTED_HEALTH_FAILED=1'
+            exit 21
+          fi
+          code="$(curl -sS --max-time 8 -o /tmp/rapidito-health-repaired -w '%{http_code}' https://webhook.wifirapidito.com/webhook || true)"
+          if [ "$code" != 200 ] || ! grep -q 'Webhook receiver is active' /tmp/rapidito-health-repaired; then
+            echo "PUBLIC_WEBHOOK_FAILED=$code"
+            exit 22
+          fi
+          restore=0
+          trap - EXIT
+          echo 'ACTIVE_BOT_DELIVERY_DIAGNOSTICS_ENABLED=1'
+          echo 'PUBLIC_HEALTH_HTTP=200'
+          echo 'BOT_SOURCE_BACKUP_READY=1'
+          REMOTE
